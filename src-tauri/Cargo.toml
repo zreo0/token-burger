@@ -1,0 +1,17 @@
+[package]
+name = "token-burger"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-png"] }
+tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+notify = "7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+chrono = "0.4"
