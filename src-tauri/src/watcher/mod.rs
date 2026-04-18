@@ -45,13 +45,19 @@ impl WatcherEngine {
 
         let handle = thread::spawn(move || {
             // 阶段一：冷启动——解析历史数据
+            let known_offsets = offset::load_offsets_from_db(&db_path);
             let total = adapters.len() as u32;
-            log::info!(target: "token_burger::watcher", "冷启动开始: {} 个 adapter", total);
+            log::info!(target: "token_burger::watcher", "冷启动开始: {} 个 adapter, 已知 {} 个文件 offset", total, known_offsets.len());
             for (idx, adapter) in adapters.iter().enumerate() {
                 if flag.load(Ordering::Relaxed) {
                     return;
                 }
-                cold_start_adapter(adapter.as_ref(), &write_tx, config.keep_days);
+                cold_start_adapter(
+                    adapter.as_ref(),
+                    &write_tx,
+                    config.keep_days,
+                    &known_offsets,
+                );
 
                 let _ = app_handle.emit(
                     "cold-start-progress",
@@ -106,7 +112,12 @@ impl WatcherEngine {
 }
 
 /// 冷启动：扫描单个 Adapter 的历史文件
-fn cold_start_adapter(adapter: &dyn AgentAdapter, write_tx: &Sender<WriteRequest>, keep_days: u32) {
+fn cold_start_adapter(
+    adapter: &dyn AgentAdapter,
+    write_tx: &Sender<WriteRequest>,
+    keep_days: u32,
+    known_offsets: &std::collections::HashMap<String, u64>,
+) {
     let cutoff = chrono::Local::now() - chrono::Duration::days(keep_days as i64);
     let cutoff_ts = cutoff.timestamp();
     let agent = adapter.agent_name();
@@ -116,6 +127,7 @@ fn cold_start_adapter(adapter: &dyn AgentAdapter, write_tx: &Sender<WriteRequest
             let mut total_files = 0u32;
             let mut total_records = 0u32;
             let mut skipped_old = 0u32;
+            let mut skipped_known = 0u32;
 
             for base_path in &paths {
                 for pattern in &adapter.log_paths() {
@@ -137,6 +149,14 @@ fn cold_start_adapter(adapter: &dyn AgentAdapter, write_tx: &Sender<WriteRequest
                                     as i64;
                                 if mtime_ts < cutoff_ts {
                                     skipped_old += 1;
+                                    continue;
+                                }
+                            }
+                            // offset 过滤：文件大小未变则跳过
+                            let path_str = entry.to_string_lossy().to_string();
+                            if let Some(&prev_offset) = known_offsets.get(&path_str) {
+                                if meta.len() <= prev_offset {
+                                    skipped_known += 1;
                                     continue;
                                 }
                             }
@@ -163,11 +183,12 @@ fn cold_start_adapter(adapter: &dyn AgentAdapter, write_tx: &Sender<WriteRequest
                 let _ = base_path;
             }
             log::info!(
-                "[冷启动] {} 完成: 扫描 {} 个文件, 解析 {} 条记录, 跳过 {} 个过期文件",
+                "[冷启动] {} 完成: 扫描 {} 个文件, 解析 {} 条记录, 跳过 {} 个过期文件, 跳过 {} 个已处理文件",
                 agent,
                 total_files,
                 total_records,
-                skipped_old
+                skipped_old,
+                skipped_known
             );
         }
         DataSource::Sqlite { db_path } => {
