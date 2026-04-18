@@ -3,6 +3,9 @@
     "description": "Default capability for popup and settings windows",
     "windows": ["popup", "settings"],
     "permissions": [
-        "core:default"
+        "core:default",
+        "core:event:default",
+        "core:event:allow-listen",
+        "core:event:allow-emit"
     ]
 }

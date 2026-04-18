@@ -1,7 +1,11 @@
+pub mod claude_code;
+pub mod codex;
+pub mod gemini_cli;
+pub mod opencode;
+
 use std::path::{Path, PathBuf};
 
 /// Agent 日志数据源类型
-#[allow(dead_code)]
 pub enum DataSource {
     /// JSONL 文件，支持 offset 增量读取
     Jsonl { paths: Vec<PathBuf> },
@@ -12,7 +16,6 @@ pub enum DataSource {
 }
 
 /// Token 类型枚举，与前端 TokenLog.token_type 联合类型一致
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TokenType {
@@ -24,7 +27,6 @@ pub enum TokenType {
 
 /// 统一的 Token 日志结构（与 SQLite token_logs 表对应）
 /// timestamp 格式：RFC3339（如 2026-04-18T10:00:00+08:00）
-#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TokenLog {
     pub id: Option<i64>,
@@ -38,27 +40,37 @@ pub struct TokenLog {
     pub latency_ms: Option<i64>,
     pub is_error: bool,
     pub metadata: Option<String>,
+    /// Agent 自带的花费（美元），None 表示需要前端用价格表计算
+    pub cost: Option<f64>,
     pub timestamp: String,
 }
 
 /// Agent 适配器 Trait
-///
-/// Watcher 引擎根据 `data_source()` 返回值自动选择监听策略：
-/// - Jsonl: notify + debounce
-/// - Json: 定时轮询 + mtime 检查
-/// - Sqlite: 定时查询
-#[allow(dead_code)]
 pub trait AgentAdapter: Send + Sync {
     fn agent_name(&self) -> &str;
     fn data_source(&self) -> DataSource;
+    /// 返回需要监听的日志路径模式列表（支持 glob）
+    fn log_paths(&self) -> Vec<String>;
     /// 解析文本内容（JSONL/JSON），返回统一的 Token 日志集合
     fn parse_content(&self, content: &str) -> Vec<TokenLog>;
     /// 查询外部 SQLite 数据库，since 为上次查询的时间戳
     fn query_db(
         &self,
-        db_path: &Path,
-        since: Option<i64>,
-    ) -> Result<Vec<TokenLog>, Box<dyn std::error::Error>>;
+        _db_path: &Path,
+        _since: Option<i64>,
+    ) -> Result<Vec<TokenLog>, Box<dyn std::error::Error>> {
+        Err("此 Adapter 不支持 SQLite 查询".into())
+    }
+}
+
+/// 创建所有内置 Adapter 实例
+pub fn all_adapters() -> Vec<Box<dyn AgentAdapter>> {
+    vec![
+        Box::new(claude_code::ClaudeCodeAdapter),
+        Box::new(codex::CodexAdapter),
+        Box::new(gemini_cli::GeminiCliAdapter),
+        Box::new(opencode::OpenCodeAdapter),
+    ]
 }
 
 #[cfg(test)]
@@ -78,6 +90,7 @@ mod tests {
             latency_ms: Some(350),
             is_error: false,
             metadata: None,
+            cost: None,
             timestamp: "2026-04-18T10:00:00+08:00".into(),
         }
     }
@@ -109,6 +122,7 @@ mod tests {
             latency_ms: None,
             is_error: true,
             metadata: None,
+            cost: None,
             timestamp: "2026-04-18T11:00:00+08:00".into(),
         };
         let json = serde_json::to_string(&log).expect("序列化失败");

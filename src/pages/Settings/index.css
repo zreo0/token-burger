@@ -1,0 +1,378 @@
+.settings-container {
+    display: flex;
+    flex-direction: column;
+    width: 480px;
+    min-height: 360px;
+    padding: 16px;
+    background: #f5f5f7;
+    color: rgba(0, 0, 0, 0.85);
+    height: 100vh;
+    overflow-y: auto;
+    font-family: -apple-system, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif;
+    user-select: none;
+}
+
+.settings-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.06);
+    margin-bottom: 16px;
+}
+
+.settings-tab {
+    flex: 1;
+    padding: 6px 12px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(0, 0, 0, 0.5);
+    cursor: pointer;
+    transition: all 150ms ease;
+}
+
+.settings-tab.active {
+    background: white;
+    color: rgba(0, 0, 0, 0.85);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.settings-content {
+    flex: 1;
+}
+
+.settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 0;
+}
+
+.setting-row label {
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(0, 0, 0, 0.7);
+}
+
+.setting-row select {
+    padding: 4px 8px;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 6px;
+    background: white;
+    font-size: 13px;
+}
+
+.segmented-control-sm {
+    display: flex;
+    gap: 1px;
+    padding: 2px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.06);
+}
+
+.segment-sm {
+    padding: 4px 10px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    font-size: 12px;
+    font-weight: 500;
+    color: rgba(0, 0, 0, 0.5);
+    cursor: pointer;
+    transition: all 150ms ease;
+}
+
+.segment-sm.active {
+    background: white;
+    color: rgba(0, 0, 0, 0.85);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.agent-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.03);
+}
+
+.agent-card.agent-unavailable {
+    opacity: 0.5;
+}
+
+.agent-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.agent-name {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.agent-name-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.agent-source-badge {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.06);
+    color: rgba(0, 0, 0, 0.45);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.agent-status {
+    font-size: 11px;
+}
+
+.agent-status.enabled {
+    color: #10b981;
+}
+
+.agent-status.disabled {
+    color: rgba(0, 0, 0, 0.35);
+}
+
+/* Toggle Switch */
+.toggle {
+    position: relative;
+    width: 40px;
+    height: 22px;
+}
+
+.toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    inset: 0;
+    border-radius: 11px;
+    background: rgba(0, 0, 0, 0.15);
+    cursor: pointer;
+    transition: background 200ms ease;
+}
+
+.toggle-slider::before {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: white;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    transition: transform 200ms ease;
+}
+
+.toggle input:checked + .toggle-slider {
+    background: #3b82f6;
+}
+
+.toggle input:checked + .toggle-slider::before {
+    transform: translateX(18px);
+}
+
+.keep-days-input {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.keep-days-input input {
+    width: 60px;
+    padding: 4px 8px;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 6px;
+    font-size: 13px;
+    text-align: center;
+}
+
+.keep-days-input span {
+    font-size: 13px;
+    color: rgba(0, 0, 0, 0.5);
+}
+
+.setting-actions {
+    display: flex;
+    gap: 8px;
+    padding-top: 8px;
+}
+
+.btn-secondary {
+    padding: 6px 14px;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 6px;
+    background: white;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 150ms ease;
+}
+
+.btn-secondary:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+.btn-danger {
+    padding: 6px 14px;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 6px;
+    background: rgba(239, 68, 68, 0.08);
+    color: #ef4444;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 150ms ease;
+}
+
+.btn-danger:hover {
+    background: rgba(239, 68, 68, 0.15);
+}
+
+.confirm-dialog {
+    margin-top: 8px;
+    padding: 12px;
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.05);
+    border: 1px solid rgba(239, 68, 68, 0.15);
+}
+
+.confirm-dialog p {
+    font-size: 13px;
+    color: rgba(0, 0, 0, 0.7);
+    margin: 0 0 8px;
+}
+
+.confirm-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+@media (prefers-color-scheme: dark) {
+    .settings-container {
+        background: #1e1e1e;
+        color: rgba(255, 255, 255, 0.9);
+    }
+
+    .settings-tabs {
+        background: rgba(255, 255, 255, 0.08);
+    }
+
+    .settings-tab {
+        color: rgba(255, 255, 255, 0.5);
+    }
+
+    .settings-tab.active {
+        background: rgba(255, 255, 255, 0.12);
+        color: rgba(255, 255, 255, 0.9);
+        box-shadow: none;
+    }
+
+    .setting-row label {
+        color: rgba(255, 255, 255, 0.7);
+    }
+
+    .setting-row select {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 255, 255, 0.12);
+        color: white;
+    }
+
+    .segmented-control-sm {
+        background: rgba(255, 255, 255, 0.08);
+    }
+
+    .segment-sm {
+        color: rgba(255, 255, 255, 0.5);
+    }
+
+    .segment-sm.active {
+        background: rgba(255, 255, 255, 0.12);
+        color: rgba(255, 255, 255, 0.9);
+        box-shadow: none;
+    }
+
+    .agent-card {
+        background: rgba(255, 255, 255, 0.05);
+    }
+
+    .agent-name {
+        color: rgba(255, 255, 255, 0.9);
+    }
+
+    .agent-status.disabled {
+        color: rgba(255, 255, 255, 0.35);
+    }
+
+    .toggle-slider {
+        background: rgba(255, 255, 255, 0.2);
+    }
+
+    .keep-days-input input {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 255, 255, 0.12);
+        color: white;
+    }
+
+    .keep-days-input span {
+        color: rgba(255, 255, 255, 0.5);
+    }
+
+    .btn-secondary {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 255, 255, 0.12);
+        color: white;
+    }
+
+    .btn-secondary:hover {
+        background: rgba(255, 255, 255, 0.12);
+    }
+
+    .confirm-dialog {
+        background: rgba(239, 68, 68, 0.1);
+    }
+
+    .confirm-dialog p {
+        color: rgba(255, 255, 255, 0.7);
+    }
+}
+
+.dev-mode-badge {
+    margin-top: 12px;
+    text-align: center;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    color: rgba(0, 0, 0, 0.25);
+}
+
+@media (prefers-color-scheme: dark) {
+    .dev-mode-badge {
+        color: rgba(255, 255, 255, 0.25);
+    }
+
+    .agent-source-badge {
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.45);
+    }
+}

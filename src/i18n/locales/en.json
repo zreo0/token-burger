@@ -1,0 +1,42 @@
+{
+    "popup": {
+        "title": "TokenBurger",
+        "today": "Today",
+        "week": "7 Days",
+        "month": "30 Days",
+        "input": "Input",
+        "cache_create": "Cache Write",
+        "cache_read": "Cache Read",
+        "output": "Output",
+        "total": "Total",
+        "cost": "Est. Cost",
+        "loading": "Loading...",
+        "coldStart": "Scanning {{agent}}...",
+        "settings": "Settings"
+    },
+    "settings": {
+        "title": "Settings",
+        "general": "General",
+        "agents": "Agents",
+        "data": "Data",
+        "language": "Language",
+        "watchMode": "Watch Mode",
+        "realtime": "Realtime",
+        "polling": "Polling",
+        "keepDays": "Keep data for",
+        "days": "days",
+        "clearOld": "Clear Old Data",
+        "clearAll": "Clear All Data",
+        "clearConfirm": "Are you sure? This cannot be undone.",
+        "cancel": "Cancel",
+        "confirm": "Confirm",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "unavailable": "Unavailable",
+        "notDetected": "Not Detected"
+    },
+    "common": {
+        "error": "Something went wrong",
+        "retry": "Retry"
+    }
+}

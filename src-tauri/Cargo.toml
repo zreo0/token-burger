@@ -11,7 +11,15 @@ tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-pn
 tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 notify = "7"
+notify-debouncer-full = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 chrono = "0.4"
+reqwest = { version = "0.12", features = ["rustls-tls", "json", "blocking"] }
+glob = "0.3"
+log = { version = "0.4", features = ["std"] }
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"

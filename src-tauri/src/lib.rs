@@ -1,10 +1,15 @@
 mod adapters;
+mod commands;
 mod db;
+pub mod logger;
+mod pricing;
+mod types;
 mod watcher;
 
 use tauri::{
+    menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager,
+    Manager, WebviewUrl,
 };
 
 pub fn run() {
@@ -15,16 +20,135 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
+            // 初始化数据库
+            let db_path = db::get_db_path(app.handle());
+            db::init_db(&db_path).expect("数据库初始化失败");
+
+            // 加载定价表
+            let resource_dir = app
+                .path()
+                .resource_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let pricing_table = pricing::load_pricing_table(&resource_dir);
+
+            // 从数据库读取设置
+            let settings = {
+                let conn = db::open_readonly(&db_path).ok();
+                let defaults = types::AppSettings::default();
+                match conn {
+                    Some(c) => {
+                        let enabled_str =
+                            db::queries::get_setting(&c, "enabled_agents").unwrap_or(None);
+                        let enabled_agents: Vec<String> = match enabled_str {
+                            Some(s) => {
+                                serde_json::from_str(&s).unwrap_or(defaults.enabled_agents.clone())
+                            }
+                            None => defaults.enabled_agents.clone(),
+                        };
+                        let keep_days = db::queries::get_setting(&c, "keep_days")
+                            .unwrap_or(None)
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(defaults.keep_days);
+                        let watch_mode = db::queries::get_setting(&c, "watch_mode")
+                            .unwrap_or(None)
+                            .unwrap_or(defaults.watch_mode.clone());
+                        let polling_interval_secs =
+                            db::queries::get_setting(&c, "polling_interval_secs")
+                                .unwrap_or(None)
+                                .and_then(|v| v.parse().ok())
+                                .unwrap_or(defaults.polling_interval_secs);
+                        (enabled_agents, keep_days, watch_mode, polling_interval_secs)
+                    }
+                    None => (
+                        defaults.enabled_agents,
+                        defaults.keep_days,
+                        defaults.watch_mode,
+                        defaults.polling_interval_secs,
+                    ),
+                }
+            };
+            let (enabled_agents, keep_days, watch_mode, polling_interval_secs) = settings;
+
+            // 注册共享状态
+            let db_path_str = db_path.to_string_lossy().to_string();
+
+            // 启动写入线程
+            let db_manager = db::DbManager::start(db_path.clone(), app.handle().clone());
+
+            // 克隆 write_tx 供 AppState 和 Watcher 分别使用
+            let write_tx_for_state = db_manager.write_tx.clone();
+
+            // 启动 Watcher 引擎（只启动已启用的 adapter）
+            let all = adapters::all_adapters();
+            let active_adapters: Vec<Box<dyn adapters::AgentAdapter>> = all
+                .into_iter()
+                .filter(|a| enabled_agents.contains(&a.agent_name().to_string()))
+                .collect();
+            let watcher_config = watcher::WatcherConfig {
+                watch_mode,
+                polling_interval_secs,
+                keep_days,
+            };
+            let watcher_engine = watcher::WatcherEngine::start(
+                active_adapters,
+                db_manager.write_tx,
+                app.handle().clone(),
+                watcher_config,
+                db_path.clone(),
+            );
+
+            app.manage(commands::AppState {
+                db_path: db_path_str,
+                pricing: pricing_table,
+                watcher: std::sync::Mutex::new(Some(watcher_engine)),
+                write_tx: std::sync::Mutex::new(write_tx_for_state),
+            });
+
             // 使用编译时嵌入的图标
             let icon = tauri::include_image!("icons/icon.png");
 
+            // 构建右键上下文菜单
+            let settings_item = MenuItemBuilder::with_id("settings", "Settings").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+            let menu = MenuBuilder::new(app)
+                .item(&settings_item)
+                .separator()
+                .item(&quit_item)
+                .build()?;
+
             // 创建 tray icon
-            let _tray = TrayIconBuilder::new()
+            let _tray = TrayIconBuilder::with_id("main")
                 .icon(icon)
                 .icon_as_template(true)
                 .title("0")
                 .tooltip("TokenBurger")
+                .menu(&menu)
                 .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| {
+                    match event.id().as_ref() {
+                        "settings" => {
+                            if let Some(window) = app.get_webview_window("settings") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            } else {
+                                // 窗口被销毁时重建
+                                let _ = tauri::WebviewWindowBuilder::new(
+                                    app,
+                                    "settings",
+                                    WebviewUrl::App("index.html#/settings".into()),
+                                )
+                                .title("TokenBurger Settings")
+                                .inner_size(600.0, 400.0)
+                                .resizable(true)
+                                .build();
+                            }
+                        }
+                        "quit" => {
+                            std::process::exit(0);
+                        }
+                        _ => {}
+                    }
+                })
                 .on_tray_icon_event(|tray, event| {
                     // 通知 positioner 插件处理 tray 事件（用于窗口定位）
                     tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
@@ -64,9 +188,28 @@ pub fn run() {
                 });
             }
 
+            // settings 窗口关闭时改为隐藏，避免被销毁后无法重新打开
+            if let Some(settings_win) = app.get_webview_window("settings") {
+                let settings_clone = settings_win.clone();
+                settings_win.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = settings_clone.hide();
+                    }
+                });
+            }
+
             Ok(())
         })
-        // TODO: 注册 Tauri commands
+        .invoke_handler(tauri::generate_handler![
+            commands::get_token_summary,
+            commands::get_agent_list,
+            commands::toggle_agent,
+            commands::clear_data,
+            commands::get_settings,
+            commands::update_settings,
+            commands::get_pricing,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

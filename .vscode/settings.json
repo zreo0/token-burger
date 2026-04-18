@@ -4,6 +4,7 @@
         "cargo test": true,
         "npm run test": true,
         "npx vitest": true,
-        "cargo clippy": true
+        "cargo clippy": true,
+        "cargo check": true
     }
 }

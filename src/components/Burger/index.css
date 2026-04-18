@@ -1,0 +1,51 @@
+.burger-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 8px 16px;
+}
+
+.burger-bun {
+    width: 100%;
+    height: 20px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+}
+
+.burger-bun-top {
+    border-radius: 24px 24px 8px 8px;
+}
+
+.burger-bun-bottom {
+    border-radius: 8px 8px 24px 24px;
+}
+
+.burger-layers {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.burger-layer {
+    font-size: 11px;
+    font-weight: 500;
+    color: white;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.layer-label {
+    opacity: 0.9;
+}
+
+.layer-count {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+    .burger-bun {
+        background: linear-gradient(135deg, #b45309, #92400e);
+    }
+}

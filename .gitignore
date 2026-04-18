@@ -12,6 +12,7 @@ src-tauri/target/
 
 # Logs
 *.log
+logs/
 
 # Editor
 .idea/
