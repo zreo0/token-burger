@@ -1,61 +1,98 @@
 import { useTranslation } from 'react-i18next';
+import { LayoutGroup, motion } from 'framer-motion';
 import BurgerLayer from './BurgerLayer';
-import type { TokenSummary } from '../../types';
+import type { TimeRange, TokenSummary } from '../../types';
 import './index.css';
 
 interface BurgerProps {
     summary: TokenSummary | null;
+    range: TimeRange;
 }
 
 const LAYER_COLORS = {
-    input: 'linear-gradient(135deg, #60a5fa, #3b82f6)',
-    cache_create: 'linear-gradient(135deg, #a78bfa, #8b5cf6)',
-    cache_read: 'linear-gradient(135deg, #34d399, #10b981)',
-    output: 'linear-gradient(135deg, #fb923c, #f97316)',
+    output: '#F8D08E',
+    cache_read: '#B2DE75',
+    cache_create: '#F4B298',
+    input: '#F8C97E',
 };
 
-function Burger({ summary }: BurgerProps) {
+function Burger({ summary, range }: BurgerProps) {
     const { t } = useTranslation();
 
     const maxCount = summary
-        ? Math.max(summary.input, summary.cache_create, summary.cache_read, summary.output, 1)
+        ? Math.max(summary.cache_create, summary.cache_read, 1)
         : 1;
 
+    const total = summary
+        ? summary.input + summary.cache_create + summary.cache_read + summary.output
+        : 0;
+
     return (
-        <div className="burger-container">
-            {/* 顶部面包 */}
-            <div className="burger-bun burger-bun-top" />
+        <LayoutGroup>
+            <motion.div className="burger-container" layout>
+                <motion.div className="burger-stack" layout>
+                    <BurgerLayer
+                        label={t('popup.input')}
+                        count={summary?.input ?? 0}
+                        color={LAYER_COLORS.input}
+                        variant="bread"
+                        position="bottom"
+                        maxCount={maxCount}
+                        range={range}
+                    />
+                    <BurgerLayer
+                        label={t('popup.cache_create')}
+                        count={summary?.cache_create ?? 0}
+                        color={LAYER_COLORS.cache_create}
+                        variant="cache"
+                        position="middle"
+                        maxCount={maxCount}
+                        range={range}
+                    />
+                    <BurgerLayer
+                        label={t('popup.cache_read')}
+                        count={summary?.cache_read ?? 0}
+                        color={LAYER_COLORS.cache_read}
+                        variant="cache"
+                        position="middle"
+                        maxCount={maxCount}
+                        range={range}
+                    />
+                    <BurgerLayer
+                        label={t('popup.output')}
+                        count={summary?.output ?? 0}
+                        color={LAYER_COLORS.output}
+                        variant="bread"
+                        position="top"
+                        maxCount={maxCount}
+                        range={range}
+                    />
+                </motion.div>
 
-            <div className="burger-layers">
-                <BurgerLayer
-                    label={t('popup.output')}
-                    count={summary?.output ?? 0}
-                    color={LAYER_COLORS.output}
-                    maxCount={maxCount}
-                />
-                <BurgerLayer
-                    label={t('popup.cache_read')}
-                    count={summary?.cache_read ?? 0}
-                    color={LAYER_COLORS.cache_read}
-                    maxCount={maxCount}
-                />
-                <BurgerLayer
-                    label={t('popup.cache_create')}
-                    count={summary?.cache_create ?? 0}
-                    color={LAYER_COLORS.cache_create}
-                    maxCount={maxCount}
-                />
-                <BurgerLayer
-                    label={t('popup.input')}
-                    count={summary?.input ?? 0}
-                    color={LAYER_COLORS.input}
-                    maxCount={maxCount}
-                />
-            </div>
-
-            {/* 底部面包 */}
-            <div className="burger-bun burger-bun-bottom" />
-        </div>
+                {/* 精致的占比进度条 */}
+                {total > 0 && (
+                    <motion.div 
+                        className="burger-progress-bar"
+                        layout
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                    >
+                        {(summary?.input ?? 0) > 0 && (
+                            <div className="progress-segment" style={{ width: `${((summary?.input ?? 0) / total) * 100}%`, backgroundColor: LAYER_COLORS.input }} />
+                        )}
+                        {(summary?.cache_create ?? 0) > 0 && (
+                            <div className="progress-segment" style={{ width: `${((summary?.cache_create ?? 0) / total) * 100}%`, backgroundColor: LAYER_COLORS.cache_create }} />
+                        )}
+                        {(summary?.cache_read ?? 0) > 0 && (
+                            <div className="progress-segment" style={{ width: `${((summary?.cache_read ?? 0) / total) * 100}%`, backgroundColor: LAYER_COLORS.cache_read }} />
+                        )}
+                        {(summary?.output ?? 0) > 0 && (
+                            <div className="progress-segment" style={{ width: `${((summary?.output ?? 0) / total) * 100}%`, backgroundColor: LAYER_COLORS.output }} />
+                        )}
+                    </motion.div>
+                )}
+            </motion.div>
+        </LayoutGroup>
     );
 }
 

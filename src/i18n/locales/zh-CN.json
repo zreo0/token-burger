@@ -12,7 +12,8 @@
         "cost": "预估费用",
         "loading": "加载中...",
         "coldStart": "正在扫描 {{agent}}...",
-        "settings": "设置"
+        "settings": "设置",
+        "top_models": "主要模型"
     },
     "settings": {
         "title": "设置",

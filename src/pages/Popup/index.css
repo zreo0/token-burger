@@ -1,151 +1,240 @@
 .popup-container {
     display: flex;
     flex-direction: column;
-    width: 320px;
-    padding: 12px;
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
+    gap: 16px;
+    width: 100%;
+    height: 100vh;
+    box-sizing: border-box;
+    padding: 16px;
+    color: rgba(34, 34, 34, 0.92);
+    background: rgba(255, 255, 255, 0.88);
+    border: 0.5px solid rgba(0, 0, 0, 0.1);
+    border-radius: 18px;
+    backdrop-filter: blur(50px) saturate(1.8) brightness(1.05);
+    -webkit-backdrop-filter: blur(50px) saturate(1.8) brightness(1.05);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.7);
     font-family: -apple-system, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif;
     user-select: none;
 }
 
+@media (prefers-color-scheme: dark) {
+    .popup-container {
+        color: rgba(245, 245, 247, 0.94);
+        background: rgba(30, 30, 30, 0.88);
+        border-color: rgba(255, 255, 255, 0.1);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        backdrop-filter: blur(50px) saturate(1.5);
+        -webkit-backdrop-filter: blur(50px) saturate(1.5);
+    }
+}
+
 .segmented-control {
     display: flex;
-    gap: 2px;
+    background: rgba(120, 120, 128, 0.12);
+    border: 0.5px solid rgba(0, 0, 0, 0.04);
+    border-radius: 10px;
     padding: 2px;
-    border-radius: 8px;
-    background: rgba(0, 0, 0, 0.06);
-    margin-bottom: 12px;
 }
 
 .segment {
     flex: 1;
-    padding: 5px 8px;
     border: none;
-    border-radius: 6px;
     background: transparent;
+    padding: 6px 0;
     font-size: 12px;
     font-weight: 500;
-    color: rgba(0, 0, 0, 0.5);
+    border-radius: 8px;
     cursor: pointer;
-    transition: all 150ms ease;
+    color: rgba(34, 34, 34, 0.6);
+    transition: background 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
 }
 
 .segment.active {
-    background: white;
-    color: rgba(0, 0, 0, 0.85);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
-
-.cold-start-banner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 6px 10px;
-    margin-bottom: 8px;
-    border-radius: 6px;
-    background: rgba(59, 130, 246, 0.1);
-    font-size: 11px;
-    color: #3b82f6;
-}
-
-.cold-start-progress {
-    font-variant-numeric: tabular-nums;
+    background: rgba(255, 255, 255, 0.95);
+    color: rgba(17, 24, 39, 0.92);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
     font-weight: 600;
 }
 
-.popup-footer {
-    display: flex;
-    justify-content: space-between;
-    padding: 8px 4px 0;
-    margin-top: 8px;
-    border-top: 1px solid rgba(0, 0, 0, 0.06);
+@media (prefers-color-scheme: dark) {
+    .segmented-control {
+        background: rgba(255, 255, 255, 0.06);
+        border-color: rgba(255, 255, 255, 0.04);
+    }
+
+    .segment {
+        color: rgba(255, 255, 255, 0.56);
+    }
+
+    .segment.active {
+        background: rgba(255, 255, 255, 0.12);
+        color: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(255, 255, 255, 0.04);
+    }
 }
 
-.footer-item {
+.cold-start-light {
+    font-size: 11px;
+    color: rgba(34, 34, 34, 0.88);
+    text-align: center;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.05);
+    align-self: center;
+    font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-color-scheme: dark) {
+    .cold-start-light {
+        color: rgba(255, 255, 255, 0.62);
+        background: rgba(255, 255, 255, 0.08);
+    }
+}
+
+.top-summary {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 16px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.6);
+    border: 0.5px solid rgba(0, 0, 0, 0.06);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.summary-item {
     display: flex;
     flex-direction: column;
     gap: 2px;
+    min-width: 0;
 }
 
-.footer-label {
-    font-size: 10px;
-    font-weight: 500;
-    color: rgba(0, 0, 0, 0.4);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+.summary-item.right {
+    align-items: flex-end;
 }
 
-.footer-value {
-    font-size: 18px;
-    font-weight: 700;
+.summary-value {
+    font-size: 26px;
+    font-weight: 600;
+    line-height: 1;
     font-variant-numeric: tabular-nums;
-    color: rgba(0, 0, 0, 0.85);
+    letter-spacing: -0.02em;
 }
 
-.footer-value.cost {
-    color: #10b981;
+.summary-value.cost {
+    color: #34C759;
+}
+
+.summary-label {
+    font-size: 11px;
+    color: rgba(34, 34, 34, 0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+@media (prefers-color-scheme: dark) {
+    .top-summary {
+        background: rgba(255, 255, 255, 0.04);
+        border-color: rgba(255, 255, 255, 0.06);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+
+    .summary-value.cost {
+        color: #30D158;
+    }
+
+    .summary-label {
+        color: rgba(255, 255, 255, 0.52);
+    }
+}
+
+.top-models {
+    background: rgba(255, 255, 255, 0.5);
+    border: 0.5px solid rgba(0, 0, 0, 0.06);
+    border-radius: 14px;
+    padding: 16px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02), inset 0 1px 0 rgba(255, 255, 255, 0.42);
+}
+
+@media (prefers-color-scheme: dark) {
+    .top-models {
+        background: rgba(255, 255, 255, 0.03);
+        border-color: rgba(255, 255, 255, 0.06);
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    }
+}
+
+.models-header {
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(34, 34, 34, 0.48);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.model-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    margin-bottom: 8px;
+    gap: 12px;
+}
+
+.model-row:last-child {
+    margin-bottom: 0;
+}
+
+.model-name {
+    color: rgba(34, 34, 34, 0.72);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 70%;
+}
+
+@media (prefers-color-scheme: dark) {
+    .models-header {
+        color: rgba(255, 255, 255, 0.48);
+    }
+
+    .model-name {
+        color: rgba(255, 255, 255, 0.7);
+    }
+}
+
+.model-count {
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+    color: inherit;
 }
 
 .popup-error {
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 24px;
-    gap: 8px;
-    color: rgba(0, 0, 0, 0.5);
+    justify-content: center;
+    gap: 10px;
+    min-height: 100vh;
+    color: rgba(34, 34, 34, 0.64);
 }
 
 .popup-error button {
-    padding: 4px 12px;
-    border: 1px solid rgba(0, 0, 0, 0.1);
-    border-radius: 6px;
-    background: white;
+    padding: 6px 12px;
+    border: 1px solid rgba(15, 23, 42, 0.1);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.82);
     cursor: pointer;
 }
 
 @media (prefers-color-scheme: dark) {
-    .popup-container {
-        background: rgba(30, 30, 30, 0.85);
-        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
-    }
-
-    .segmented-control {
-        background: rgba(255, 255, 255, 0.08);
-    }
-
-    .segment {
-        color: rgba(255, 255, 255, 0.5);
-    }
-
-    .segment.active {
-        background: rgba(255, 255, 255, 0.12);
-        color: rgba(255, 255, 255, 0.9);
-        box-shadow: none;
-    }
-
-    .popup-footer {
-        border-top-color: rgba(255, 255, 255, 0.08);
-    }
-
-    .footer-label {
-        color: rgba(255, 255, 255, 0.4);
-    }
-
-    .footer-value {
-        color: rgba(255, 255, 255, 0.9);
-    }
-
     .popup-error {
-        color: rgba(255, 255, 255, 0.5);
+        color: rgba(255, 255, 255, 0.64);
     }
 
     .popup-error button {
-        background: rgba(255, 255, 255, 0.1);
-        border-color: rgba(255, 255, 255, 0.1);
-        color: white;
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.92);
     }
 }

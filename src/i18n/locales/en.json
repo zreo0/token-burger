@@ -12,7 +12,8 @@
         "cost": "Est. Cost",
         "loading": "Loading...",
         "coldStart": "Scanning {{agent}}...",
-        "settings": "Settings"
+        "settings": "Settings",
+        "top_models": "Top Models"
     },
     "settings": {
         "title": "Settings",

@@ -16,16 +16,6 @@
         "macOSPrivateApi": true,
         "windows": [
             {
-                "label": "popup",
-                "title": "TokenBurger",
-                "width": 360,
-                "height": 480,
-                "resizable": false,
-                "decorations": false,
-                "visible": false,
-                "transparent": true
-            },
-            {
                 "label": "settings",
                 "title": "TokenBurger Settings",
                 "url": "index.html#/settings",
