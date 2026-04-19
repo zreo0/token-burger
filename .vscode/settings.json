@@ -5,6 +5,9 @@
         "npm run test": true,
         "npx vitest": true,
         "cargo clippy": true,
-        "cargo check": true
+        "cargo check": true,
+        "mkdir": true,
+        "exit": true,
+        "mv": true
     }
 }
