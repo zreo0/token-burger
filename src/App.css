@@ -27,7 +27,7 @@
 body {
     font-family: -apple-system, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
-    background: transparent;
+    background: #f2f2f7;
     color: var(--text-primary);
     overflow: hidden;
 }
@@ -35,4 +35,12 @@ body {
 #root {
     width: 100%;
     height: 100vh;
+    background: #f2f2f7;
+}
+
+@media (prefers-color-scheme: dark) {
+    body,
+    #root {
+        background: #1c1c1e;
+    }
 }

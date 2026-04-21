@@ -54,6 +54,12 @@ export interface AppSettings {
     language: string;
 }
 
+// 当前运行平台
+export interface PlatformInfo {
+    platform: string;
+    display_name: string;
+}
+
 // 模型价格信息
 export interface ModelPrice {
     input_cost_per_token: number;

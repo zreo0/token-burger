@@ -17,13 +17,16 @@ const POPUP_WINDOW_LABEL: &str = "popup";
 const POPUP_WINDOW_WIDTH: f64 = 390.0;
 const POPUP_WINDOW_HEIGHT: f64 = 540.0;
 
-fn attach_popup_auto_hide<R: Runtime>(popup: &WebviewWindow<R>) {
-    let popup_clone = popup.clone();
-    popup.on_window_event(move |event| {
-        if let tauri::WindowEvent::Focused(false) = event {
-            let _ = popup_clone.hide();
-        }
-    });
+fn attach_popup_auto_hide<R: Runtime>(_popup: &WebviewWindow<R>) {
+    #[cfg(not(debug_assertions))]
+    {
+        let popup_clone = _popup.clone();
+        _popup.on_window_event(move |event| {
+            if let tauri::WindowEvent::Focused(false) = event {
+                let _ = popup_clone.hide();
+            }
+        });
+    }
 }
 
 fn get_popup_initial_position<R: Runtime>(app: &AppHandle<R>, rect: &Rect) -> (f64, f64) {
@@ -218,7 +221,7 @@ pub fn run() {
                                     WebviewUrl::App("index.html#/settings".into()),
                                 )
                                 .title("TokenBurger Settings")
-                                .inner_size(600.0, 400.0)
+                                .inner_size(640.0, 520.0)
                                 .resizable(true)
                                 .build();
                             }
@@ -279,6 +282,7 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::get_pricing,
+            commands::get_platform_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -78,3 +78,10 @@ pub struct ColdStartProgress {
     pub total: u32,
     pub completed: u32,
 }
+
+/// 平台信息（IPC 传输用）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PlatformInfo {
+    pub platform: String,
+    pub display_name: String,
+}

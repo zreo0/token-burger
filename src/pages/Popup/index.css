@@ -28,28 +28,28 @@
     }
 }
 
-.segmented-control {
+.popup-container .segmented-control {
     display: flex;
     background: rgba(120, 120, 128, 0.12);
     border: 0.5px solid rgba(0, 0, 0, 0.04);
-    border-radius: 10px;
+    border-radius: 12px;
     padding: 2px;
 }
 
-.segment {
+.popup-container .segment {
     flex: 1;
     border: none;
     background: transparent;
     padding: 6px 0;
     font-size: 12px;
     font-weight: 500;
-    border-radius: 8px;
+    border-radius: 10px;
     cursor: pointer;
     color: rgba(34, 34, 34, 0.6);
     transition: background 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
 }
 
-.segment.active {
+.popup-container .segment.active {
     background: rgba(255, 255, 255, 0.95);
     color: rgba(17, 24, 39, 0.92);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
@@ -57,23 +57,23 @@
 }
 
 @media (prefers-color-scheme: dark) {
-    .segmented-control {
+    .popup-container .segmented-control {
         background: rgba(255, 255, 255, 0.06);
         border-color: rgba(255, 255, 255, 0.04);
     }
 
-    .segment {
+    .popup-container .segment {
         color: rgba(255, 255, 255, 0.56);
     }
 
-    .segment.active {
+    .popup-container .segment.active {
         background: rgba(255, 255, 255, 0.12);
         color: rgba(255, 255, 255, 0.92);
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(255, 255, 255, 0.04);
     }
 }
 
-.cold-start-light {
+.popup-container .cold-start-light {
     font-size: 11px;
     color: rgba(34, 34, 34, 0.88);
     text-align: center;
@@ -85,13 +85,13 @@
 }
 
 @media (prefers-color-scheme: dark) {
-    .cold-start-light {
+    .popup-container .cold-start-light {
         color: rgba(255, 255, 255, 0.62);
         background: rgba(255, 255, 255, 0.08);
     }
 }
 
-.top-summary {
+.popup-container .top-summary {
     display: flex;
     justify-content: space-between;
     gap: 12px;
@@ -102,18 +102,18 @@
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02), inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 
-.summary-item {
+.popup-container .summary-item {
     display: flex;
     flex-direction: column;
     gap: 2px;
     min-width: 0;
 }
 
-.summary-item.right {
+.popup-container .summary-item.right {
     align-items: flex-end;
 }
 
-.summary-value {
+.popup-container .summary-value {
     font-size: 26px;
     font-weight: 600;
     line-height: 1;
@@ -121,11 +121,11 @@
     letter-spacing: -0.02em;
 }
 
-.summary-value.cost {
+.popup-container .summary-value.cost {
     color: #34C759;
 }
 
-.summary-label {
+.popup-container .summary-label {
     font-size: 11px;
     color: rgba(34, 34, 34, 0.5);
     text-transform: uppercase;
@@ -133,22 +133,22 @@
 }
 
 @media (prefers-color-scheme: dark) {
-    .top-summary {
+    .popup-container .top-summary {
         background: rgba(255, 255, 255, 0.04);
         border-color: rgba(255, 255, 255, 0.06);
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.04);
     }
 
-    .summary-value.cost {
+    .popup-container .summary-value.cost {
         color: #30D158;
     }
 
-    .summary-label {
+    .popup-container .summary-label {
         color: rgba(255, 255, 255, 0.52);
     }
 }
 
-.top-models {
+.popup-container .top-models {
     background: rgba(255, 255, 255, 0.5);
     border: 0.5px solid rgba(0, 0, 0, 0.06);
     border-radius: 14px;
@@ -157,14 +157,14 @@
 }
 
 @media (prefers-color-scheme: dark) {
-    .top-models {
+    .popup-container .top-models {
         background: rgba(255, 255, 255, 0.03);
         border-color: rgba(255, 255, 255, 0.06);
         box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.03);
     }
 }
 
-.models-header {
+.popup-container .models-header {
     font-size: 11px;
     font-weight: 600;
     color: rgba(34, 34, 34, 0.48);
@@ -173,7 +173,7 @@
     letter-spacing: 0.08em;
 }
 
-.model-row {
+.popup-container .model-row {
     display: flex;
     justify-content: space-between;
     font-size: 13px;
@@ -181,11 +181,11 @@
     gap: 12px;
 }
 
-.model-row:last-child {
+.popup-container .model-row:last-child {
     margin-bottom: 0;
 }
 
-.model-name {
+.popup-container .model-name {
     color: rgba(34, 34, 34, 0.72);
     white-space: nowrap;
     overflow: hidden;
@@ -194,16 +194,16 @@
 }
 
 @media (prefers-color-scheme: dark) {
-    .models-header {
+    .popup-container .models-header {
         color: rgba(255, 255, 255, 0.48);
     }
 
-    .model-name {
+    .popup-container .model-name {
         color: rgba(255, 255, 255, 0.7);
     }
 }
 
-.model-count {
+.popup-container .model-count {
     font-variant-numeric: tabular-nums;
     font-weight: 500;
     color: inherit;

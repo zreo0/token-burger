@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::adapters;
 use crate::db;
-use crate::types::{AgentInfo, AppSettings, PricingTable, TokenSummary};
+use crate::types::{AgentInfo, AppSettings, PlatformInfo, PricingTable, TokenSummary};
 use crate::watcher;
 
 /// Tauri 共享状态
@@ -194,10 +194,19 @@ pub fn get_settings(state: State<AppState>) -> Result<AppSettings, String> {
 }
 
 #[tauri::command]
-pub fn update_settings(key: String, value: String, state: State<AppState>) -> Result<(), String> {
+pub fn update_settings(
+    key: String,
+    value: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<(), String> {
     let conn = rusqlite::Connection::open(&db_path_from(&state)).map_err(|e| e.to_string())?;
     db::queries::set_setting(&conn, &key, &value).map_err(|e| e.to_string())?;
     drop(conn);
+
+    if key == "language" {
+        let _ = app.emit("settings-language-changed", &value);
+    }
 
     // watch_mode / polling_interval / enabled_agents 变更后重启 Watcher
     if matches!(
@@ -212,6 +221,27 @@ pub fn update_settings(key: String, value: String, state: State<AppState>) -> Re
 #[tauri::command]
 pub fn get_pricing(state: State<AppState>) -> Result<PricingTable, String> {
     Ok(state.pricing.clone())
+}
+
+fn current_platform_info() -> PlatformInfo {
+    let platform = std::env::consts::OS.to_string();
+    let display_name = match platform.as_str() {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        other => other,
+    }
+    .to_string();
+
+    PlatformInfo {
+        platform,
+        display_name,
+    }
+}
+
+#[tauri::command]
+pub fn get_platform_info() -> Result<PlatformInfo, String> {
+    Ok(current_platform_info())
 }
 
 /// 格式化 token 数量为可读字符串（用于 tray title）

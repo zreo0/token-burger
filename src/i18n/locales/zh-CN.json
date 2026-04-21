@@ -31,6 +31,7 @@
         "clearConfirm": "确定要执行此操作吗？操作不可撤销。",
         "cancel": "取消",
         "confirm": "确认",
+        "platform": "平台",
         "enabled": "已启用",
         "disabled": "已禁用",
         "unavailable": "不可用",
