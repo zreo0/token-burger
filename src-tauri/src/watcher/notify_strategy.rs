@@ -48,7 +48,7 @@ pub fn run_notify_polling(
                           file_offsets: &mut HashMap<String, u64>,
                           debouncer: &mut notify_debouncer_full::Debouncer<
         notify::RecommendedWatcher,
-        notify_debouncer_full::FileIdMap,
+        notify_debouncer_full::RecommendedCache,
     >| {
         for pattern in patterns {
             if let Ok(entries) = glob::glob(pattern) {

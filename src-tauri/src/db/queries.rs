@@ -145,9 +145,7 @@ fn get_grouped_summary(
     let mut result: HashMap<String, crate::types::TokenBreakdown> = HashMap::new();
     for row in rows {
         let (key, token_type, count, cost) = row?;
-        let entry = result
-            .entry(key)
-            .or_insert_with(crate::types::TokenBreakdown::default);
+        let entry = result.entry(key).or_default();
         entry.agent_cost += cost;
         match token_type.as_str() {
             "input" => entry.input = count,

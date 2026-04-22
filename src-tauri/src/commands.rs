@@ -125,7 +125,7 @@ pub fn toggle_agent(
     enabled: bool,
     state: State<AppState>,
 ) -> Result<(), String> {
-    let conn = rusqlite::Connection::open(&db_path_from(&state)).map_err(|e| e.to_string())?;
+    let conn = rusqlite::Connection::open(db_path_from(&state)).map_err(|e| e.to_string())?;
     let defaults = AppSettings::default();
     let current_str = db::queries::get_setting(&conn, "enabled_agents").unwrap_or(None);
     let mut current: Vec<String> = match current_str {
@@ -204,7 +204,7 @@ pub fn update_settings(
     app: AppHandle,
     state: State<AppState>,
 ) -> Result<(), String> {
-    let conn = rusqlite::Connection::open(&db_path_from(&state)).map_err(|e| e.to_string())?;
+    let conn = rusqlite::Connection::open(db_path_from(&state)).map_err(|e| e.to_string())?;
     db::queries::set_setting(&conn, &key, &value).map_err(|e| e.to_string())?;
     drop(conn);
 

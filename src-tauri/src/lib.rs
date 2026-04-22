@@ -248,12 +248,12 @@ pub fn run() {
                             if window.is_visible().unwrap_or(false) {
                                 let _ = window.hide();
                             } else {
-                                position_popup_window(&app, &window, &rect);
+                                position_popup_window(app, &window, &rect);
                                 let _ = window.show();
                                 let _ = window.set_focus();
                             }
-                        } else if let Ok(window) = ensure_popup_window(&app, &rect) {
-                            position_popup_window(&app, &window, &rect);
+                        } else if let Ok(window) = ensure_popup_window(app, &rect) {
+                            position_popup_window(app, &window, &rect);
                             let _ = window.show();
                             let _ = window.set_focus();
                         }

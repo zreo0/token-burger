@@ -78,7 +78,7 @@ fn load_latest_cache() -> Option<PricingTable> {
                 .starts_with("model_pricing_")
         })
         .collect();
-    entries.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.file_name()));
     for entry in entries {
         if let Ok(content) = std::fs::read_to_string(entry.path()) {
             if let Ok(table) = serde_json::from_str::<PricingTable>(&content) {
