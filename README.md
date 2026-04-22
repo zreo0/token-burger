@@ -8,11 +8,15 @@
 3. 支持多种 Agent，开箱即用支持主流 AI Coding Agent，未来还会持续增加支持更多 Agent。
 
 
+## 示意图
+![Menu Bar Screenshot](./docs/images/menu-bar.png)
+
 ![App Screenshot](./docs/images/usage-popup.png)
 
 # 安装
 
 通过 github release 下载预编译的安装包，或从源码构建。
+
 
 # 开发
 
