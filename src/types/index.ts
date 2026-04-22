@@ -52,6 +52,7 @@ export interface AppSettings {
     keep_days: number;
     polling_interval_secs: number;
     language: string;
+    color_theme: string;
 }
 
 // 当前运行平台

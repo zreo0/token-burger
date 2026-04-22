@@ -12,6 +12,8 @@
     display: flex;
     flex-direction: column-reverse;
     gap: 3px;
+    border-radius: 14px;
+    overflow: hidden;
 }
 
 .burger-layer {
@@ -27,6 +29,7 @@
     letter-spacing: -0.01em;
     box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.3);
     border: 0.5px solid rgba(0, 0, 0, 0.06);
+    border-radius: 6px;
 }
 
 .burger-layer::before {
@@ -44,18 +47,6 @@
 
 .burger-layer--cache {
     color: #2C2E2D;
-}
-
-.burger-layer--top {
-    border-radius: 14px 14px 6px 6px;
-}
-
-.burger-layer--middle {
-    border-radius: 6px;
-}
-
-.burger-layer--bottom {
-    border-radius: 6px 6px 14px 14px;
 }
 
 .layer-label {
@@ -95,7 +86,14 @@
 @media (prefers-color-scheme: dark) {
     .burger-layer {
         border-color: rgba(255, 255, 255, 0.06);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25),
+                    inset 0 1px 0 rgba(255, 255, 255, 0.15),
+                    inset 0 -1px 0 rgba(0, 0, 0, 0.1);
+    }
+
+    /* 深色模式下用 ::before 叠加微妙渐变，增加立体感 */
+    .burger-layer::before {
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0) 50%, rgba(0, 0, 0, 0.08) 100%);
     }
 
     .burger-layer--bread {

@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { AgentInfo, AppSettings, PlatformInfo } from '../../types';
 import { getPlatformInfo } from '../../utils/platform';
+import { BURGER_THEMES } from '../../components/Burger/themes';
 import './index.css';
 
 type Tab = 'general' | 'agents' | 'data';
@@ -115,6 +116,27 @@ function Settings() {
                                                 <option value="en">English</option>
                                                 <option value="zh-CN">简体中文</option>
                                             </select>
+                                        </div>
+                                    </div>
+                                    <div className="setting-divider" />
+                                    <div className="setting-row">
+                                        <span className="setting-label">{t('settings.colorTheme')}</span>
+                                        <div className="theme-picker">
+                                            {BURGER_THEMES.map((theme) => (
+                                                <button
+                                                    key={theme.id}
+                                                    type="button"
+                                                    className={`theme-option ${settings.color_theme === theme.id ? 'active' : ''}`}
+                                                    onClick={() => updateSetting('color_theme', theme.id)}
+                                                    title={t(theme.labelKey)}
+                                                >
+                                                    <span className="theme-swatches">
+                                                        {Object.values(theme.colors).map((color, i) => (
+                                                            <span key={i} className="theme-dot" style={{ backgroundColor: color }} />
+                                                        ))}
+                                                    </span>
+                                                </button>
+                                            ))}
                                         </div>
                                     </div>
                                     <div className="setting-divider" />

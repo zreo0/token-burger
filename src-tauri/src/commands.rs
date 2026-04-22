@@ -183,6 +183,9 @@ pub fn get_settings(state: State<AppState>) -> Result<AppSettings, String> {
     let language = db::queries::get_setting(&conn, "language")
         .unwrap_or(None)
         .unwrap_or(defaults.language);
+    let color_theme = db::queries::get_setting(&conn, "color_theme")
+        .unwrap_or(None)
+        .unwrap_or(defaults.color_theme);
 
     Ok(AppSettings {
         enabled_agents,
@@ -190,6 +193,7 @@ pub fn get_settings(state: State<AppState>) -> Result<AppSettings, String> {
         keep_days,
         polling_interval_secs,
         language,
+        color_theme,
     })
 }
 
@@ -206,6 +210,10 @@ pub fn update_settings(
 
     if key == "language" {
         let _ = app.emit("settings-language-changed", &value);
+    }
+
+    if key == "color_theme" {
+        let _ = app.emit("settings-color-theme-changed", &value);
     }
 
     // watch_mode / polling_interval / enabled_agents 变更后重启 Watcher

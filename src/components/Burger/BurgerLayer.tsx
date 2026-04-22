@@ -41,7 +41,7 @@ function BurgerLayer({
     count,
     color,
     variant,
-    position,
+    position: _position,
     maxCount = 1_000_000,
     range = 'today',
 }: BurgerLayerProps) {
@@ -67,7 +67,7 @@ function BurgerLayer({
 
     return (
         <motion.div
-            className={`burger-layer burger-layer--${variant} burger-layer--${position}`}
+            className={`burger-layer burger-layer--${variant}`}
             layout
             style={{
                 height,

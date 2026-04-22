@@ -114,11 +114,11 @@
 }
 
 .popup-container .summary-value {
-    font-size: 26px;
-    font-weight: 600;
+    font-size: 28px;
+    font-weight: 700;
     line-height: 1;
     font-variant-numeric: tabular-nums;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.04em;
 }
 
 .popup-container .summary-value.cost {
@@ -127,20 +127,24 @@
 
 .popup-container .summary-label {
     font-size: 11px;
+    font-weight: 500;
     color: rgba(34, 34, 34, 0.5);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.04em;
 }
 
 @media (prefers-color-scheme: dark) {
     .popup-container .top-summary {
-        background: rgba(255, 255, 255, 0.04);
-        border-color: rgba(255, 255, 255, 0.06);
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        background: rgba(255, 255, 255, 0.03);
+        border: none;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2),
+                    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+                    inset 0 0 0 0.5px rgba(255, 255, 255, 0.06);
     }
 
     .popup-container .summary-value.cost {
         color: #30D158;
+        text-shadow: 0 0 12px rgba(48, 209, 88, 0.4);
     }
 
     .popup-container .summary-label {
@@ -159,8 +163,10 @@
 @media (prefers-color-scheme: dark) {
     .popup-container .top-models {
         background: rgba(255, 255, 255, 0.03);
-        border-color: rgba(255, 255, 255, 0.06);
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+        border: none;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2),
+                    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+                    inset 0 0 0 0.5px rgba(255, 255, 255, 0.06);
     }
 }
 
@@ -177,12 +183,25 @@
     display: flex;
     justify-content: space-between;
     font-size: 13px;
-    margin-bottom: 8px;
+    padding: 4px 8px;
+    margin: 0 -8px 4px -8px;
+    border-radius: 6px;
     gap: 12px;
+    transition: background-color 0.15s ease;
 }
 
 .popup-container .model-row:last-child {
     margin-bottom: 0;
+}
+
+.popup-container .model-row:hover {
+    background-color: rgba(0, 0, 0, 0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+    .popup-container .model-row:hover {
+        background-color: rgba(255, 255, 255, 0.05);
+    }
 }
 
 .popup-container .model-name {
@@ -228,7 +247,32 @@
 }
 
 @media (prefers-color-scheme: dark) {
-    .popup-error {
+.skeleton-pulse {
+    display: inline-block;
+    height: 1em;
+    width: 4em;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.08);
+    animation: skeleton-shimmer 1.2s ease-in-out infinite;
+    vertical-align: middle;
+}
+
+.skeleton-pulse.wide {
+    width: 5em;
+}
+
+@keyframes skeleton-shimmer {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+@media (prefers-color-scheme: dark) {
+    .skeleton-pulse {
+        background: rgba(255, 255, 255, 0.1);
+    }
+}
+
+.popup-error {
         color: rgba(255, 255, 255, 0.64);
     }
 

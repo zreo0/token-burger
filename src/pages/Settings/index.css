@@ -119,6 +119,40 @@
     margin-left: 16px;
 }
 
+/* Theme Picker */
+.settings-container .theme-picker {
+    display: flex;
+    gap: 8px;
+}
+
+.settings-container .theme-option {
+    display: flex;
+    align-items: center;
+    padding: 6px 10px;
+    border: 1.5px solid rgba(0, 0, 0, 0.08);
+    border-radius: 8px;
+    background: transparent;
+    cursor: default;
+    transition: all 150ms ease;
+}
+
+.settings-container .theme-option.active {
+    border-color: #007aff;
+    background: rgba(0, 122, 255, 0.06);
+}
+
+.settings-container .theme-swatches {
+    display: flex;
+    gap: 4px;
+}
+
+.settings-container .theme-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
 /* Select */
 .settings-container .select-wrapper select {
     appearance: none;
@@ -393,6 +427,15 @@
 
     .settings-container .setting-divider {
         background: rgba(255, 255, 255, 0.08);
+    }
+
+    .settings-container .theme-option {
+        border-color: rgba(255, 255, 255, 0.1);
+    }
+
+    .settings-container .theme-option.active {
+        border-color: #0a84ff;
+        background: rgba(10, 132, 255, 0.12);
     }
 
     .settings-container .select-wrapper select {

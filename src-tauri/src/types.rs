@@ -42,6 +42,7 @@ pub struct AppSettings {
     pub keep_days: u32,
     pub polling_interval_secs: u32,
     pub language: String,
+    pub color_theme: String,
 }
 
 impl Default for AppSettings {
@@ -52,6 +53,7 @@ impl Default for AppSettings {
             keep_days: 365,
             polling_interval_secs: 10,
             language: "en".into(),
+            color_theme: "warm".into(),
         }
     }
 }

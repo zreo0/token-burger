@@ -7,7 +7,8 @@ import Burger from '../../components/Burger';
 import ErrorBoundary from '../../components/ErrorBoundary';
 import { formatTokenCount, formatCost } from '../../utils/format';
 import { calculateTotalCost } from '../../utils/pricing';
-import type { ColdStartProgress, PricingTable, TimeRange, TokenBreakdown } from '../../types';
+import { DEFAULT_THEME_ID } from '../../components/Burger/themes';
+import type { AppSettings, ColdStartProgress, PricingTable, TimeRange, TokenBreakdown } from '../../types';
 import './index.css';
 
 const TIME_RANGES: { key: TimeRange; labelKey: string }[] = [
@@ -36,12 +37,17 @@ export function Popup() {
     const [coldStart, setColdStart] = useState<ColdStartProgress | null>(null);
     const [pricing, setPricing] = useState<PricingTable>({});
     const [pricingReady, setPricingReady] = useState(false);
+    const [colorTheme, setColorTheme] = useState(DEFAULT_THEME_ID);
 
     useEffect(() => {
         invoke<PricingTable>('get_pricing')
             .then(setPricing)
             .catch(() => {})
             .finally(() => setPricingReady(true));
+
+        invoke<AppSettings>('get_settings')
+            .then((s) => { if (s.color_theme) setColorTheme(s.color_theme); })
+            .catch(() => {});
     }, []);
 
     useEffect(() => {
@@ -57,13 +63,17 @@ export function Popup() {
             setColdStart(progress);
         });
 
+        const unlistenTheme = listen<string>('settings-color-theme-changed', (event) => {
+            setColorTheme(event.payload);
+        });
+
         return () => {
             unlisten.then((fn) => fn());
+            unlistenTheme.then((fn) => fn());
         };
     }, []);
 
     const cost = summary ? calculateTotalCost(summary.by_model, pricing) : 0;
-    const loadingLabel = t('popup.loading');
     const isSummaryLoading = loading || !summary;
     const isCostLoading = loading || !pricingReady;
     const topModels = getTopModels(summary?.by_model);
@@ -96,17 +106,17 @@ export function Popup() {
             {/* 顶部摘要 */}
             <div className="top-summary">
                 <div className="summary-item">
-                    <span className="summary-value">{isSummaryLoading ? loadingLabel : formatTokenCount(summary?.total ?? 0)}</span>
+                    <span className="summary-value">{isSummaryLoading ? <span className="skeleton-pulse" /> : formatTokenCount(summary?.total ?? 0)}</span>
                     <span className="summary-label">{t('popup.total')}</span>
                 </div>
                 <div className="summary-item right">
-                    <span className="summary-value cost">{isCostLoading ? loadingLabel : formatCost(cost)}</span>
+                    <span className="summary-value cost">{isCostLoading ? <span className="skeleton-pulse wide" /> : formatCost(cost)}</span>
                     <span className="summary-label">{t('popup.cost')}</span>
                 </div>
             </div>
 
             {/* Burger */}
-            <Burger summary={summary} range={range} />
+            <Burger summary={summary} range={range} themeId={colorTheme} />
 
             {/* Top Models */}
             {topModels.length > 0 && (
