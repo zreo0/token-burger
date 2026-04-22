@@ -1,6 +1,20 @@
 # TokenBurger 🍔
 
-菜单栏 AI Token 消耗监控工具。实时监控本地各类 AI Coding Agent（Claude Code、Codex、Gemini CLI、Copilot、OpenCode 等）的 Token 消耗，通过"四层汉堡"动画可视化展示。
+菜单栏 AI Token 消耗监控工具。实时监控本地各类 AI Coding Agent（Claude Code、Codex、OpenCode 等）的 Token 消耗，看看你的汉堡什么规格 (๑╹ڡ╹) 🍔
+
+功能特性:
+1. 实时监控，你可以在菜单栏统计今天的 Token 总计，看看今天烧了多少！
+2. 简要的分层展示，看看你的汉堡里面都是什么料，今天的缓存还健康吗？
+3. 支持多种 Agent，开箱即用支持主流 AI Coding Agent，未来还会持续增加支持更多 Agent。
+
+
+![App Screenshot](./docs/images/usage-popup.png)
+
+# 安装
+
+通过 github release 下载预编译的安装包，或从源码构建。
+
+# 开发
 
 ## 前置依赖
 
