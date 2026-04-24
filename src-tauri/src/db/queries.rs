@@ -243,6 +243,7 @@ pub fn get_all_settings(conn: &Connection) -> Result<HashMap<String, String>, ru
 mod tests {
     use super::*;
     use crate::adapters::{TokenLog, TokenType};
+    use chrono::{Datelike, Duration, Local, LocalResult, TimeZone, Utc};
 
     fn setup_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -251,6 +252,26 @@ mod tests {
     }
 
     fn make_log(agent: &str, model: &str, tt: TokenType, count: i64, req_id: &str) -> TokenLog {
+        make_log_at(
+            agent,
+            model,
+            tt,
+            count,
+            req_id,
+            chrono::Local::now()
+                .format("%Y-%m-%dT%H:%M:%S%:z")
+                .to_string(),
+        )
+    }
+
+    fn make_log_at(
+        agent: &str,
+        model: &str,
+        tt: TokenType,
+        count: i64,
+        req_id: &str,
+        timestamp: String,
+    ) -> TokenLog {
         TokenLog {
             id: None,
             agent_name: agent.into(),
@@ -264,9 +285,16 @@ mod tests {
             is_error: false,
             metadata: None,
             cost: None,
-            timestamp: chrono::Local::now()
-                .format("%Y-%m-%dT%H:%M:%S%:z")
-                .to_string(),
+            timestamp,
+        }
+    }
+
+    fn local_time_for_today(hour: u32, min: u32, sec: u32) -> chrono::DateTime<Local> {
+        let today = Local::now().date_naive();
+        match Local.with_ymd_and_hms(today.year(), today.month(), today.day(), hour, min, sec) {
+            LocalResult::Single(time) => time,
+            LocalResult::Ambiguous(earliest, _) => earliest,
+            LocalResult::None => panic!("本地时间不存在"),
         }
     }
 
@@ -336,6 +364,68 @@ mod tests {
         assert_eq!(summary.agent_cost, 0.0);
         assert!(summary.by_agent.contains_key("claude-code"));
         assert!(summary.by_model.contains_key("gpt-4o"));
+    }
+
+    #[test]
+    fn test_today_summary_uses_local_day_for_utc_timestamps() {
+        let conn = setup_db();
+        let local_start = local_time_for_today(0, 30, 0);
+        let previous_day = local_start - Duration::hours(1);
+
+        let logs = vec![
+            make_log_at(
+                "codex",
+                "codex",
+                TokenType::Input,
+                100,
+                "req-today",
+                local_start.with_timezone(&Utc).to_rfc3339(),
+            ),
+            make_log_at(
+                "codex",
+                "codex",
+                TokenType::Input,
+                900,
+                "req-yesterday",
+                previous_day.with_timezone(&Utc).to_rfc3339(),
+            ),
+        ];
+        batch_insert_token_logs(&conn, &logs).unwrap();
+
+        let summary = get_token_summary(&conn, "today").unwrap();
+        assert_eq!(summary.input, 100);
+        assert_eq!(summary.total, 100);
+    }
+
+    #[test]
+    fn test_rolling_ranges_use_current_local_time() {
+        let conn = setup_db();
+        let now = Local::now();
+        let logs = vec![
+            make_log_at(
+                "codex",
+                "codex",
+                TokenType::Input,
+                100,
+                "req-in-7d",
+                (now - Duration::days(6)).to_rfc3339(),
+            ),
+            make_log_at(
+                "codex",
+                "codex",
+                TokenType::Input,
+                900,
+                "req-out-7d",
+                (now - Duration::days(8)).to_rfc3339(),
+            ),
+        ];
+        batch_insert_token_logs(&conn, &logs).unwrap();
+
+        let seven_days = get_token_summary(&conn, "7d").unwrap();
+        let thirty_days = get_token_summary(&conn, "30d").unwrap();
+
+        assert_eq!(seven_days.input, 100);
+        assert_eq!(thirty_days.input, 1000);
     }
 
     #[test]

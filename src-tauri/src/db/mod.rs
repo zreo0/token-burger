@@ -4,10 +4,14 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 
+use chrono::{Datelike, LocalResult, TimeZone};
 use rusqlite::{Connection, OpenFlags};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::adapters::TokenLog;
+use crate::types::TokenSummary;
+
+const MIDNIGHT_REFRESH_GRACE_SECS: u32 = 1;
 
 pub(crate) const SCHEMA_SQL: &str = "
 PRAGMA journal_mode=WAL;
@@ -94,6 +98,79 @@ fn ensure_token_logs_cost_column(conn: &Connection) -> Result<(), rusqlite::Erro
     Ok(())
 }
 
+fn duration_until_next_local_day(now: chrono::DateTime<chrono::Local>) -> std::time::Duration {
+    let next_date = match now.date_naive().succ_opt() {
+        Some(date) => date,
+        None => return std::time::Duration::from_secs(60),
+    };
+
+    let target = match chrono::Local.with_ymd_and_hms(
+        next_date.year(),
+        next_date.month(),
+        next_date.day(),
+        0,
+        0,
+        MIDNIGHT_REFRESH_GRACE_SECS,
+    ) {
+        LocalResult::Single(time) => time,
+        LocalResult::Ambiguous(earliest, _) => earliest,
+        LocalResult::None => now + chrono::Duration::days(1),
+    };
+
+    target
+        .signed_duration_since(now)
+        .to_std()
+        .unwrap_or_else(|_| std::time::Duration::from_secs(1))
+}
+
+fn emit_token_summary(app_handle: &AppHandle, summary: &TokenSummary) {
+    let _ = app_handle.emit("token-updated", summary);
+    if let Some(tray) = app_handle.tray_by_id("main") {
+        let formatted = crate::commands::format_token_count(summary.total);
+        let _ = tray.set_title(Some(&formatted));
+    }
+}
+
+fn query_and_emit_today_summary(app_handle: &AppHandle, conn: &Connection) {
+    match queries::get_token_summary(conn, "today") {
+        Ok(summary) => {
+            emit_token_summary(app_handle, &summary);
+        }
+        Err(e) => {
+            log::error!("查询今日汇总失败: {}", e);
+        }
+    }
+}
+
+fn start_midnight_refresh_thread(db_path: PathBuf, app_handle: AppHandle) {
+    thread::spawn(move || {
+        let mut last_local_date = chrono::Local::now().date_naive();
+
+        loop {
+            let now = chrono::Local::now();
+            let local_date = now.date_naive();
+
+            if local_date != last_local_date {
+                let conn = match open_readonly(&db_path) {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        log::error!("零点刷新无法打开数据库: {}", e);
+                        let delay = duration_until_next_local_day(now);
+                        thread::sleep(delay.min(std::time::Duration::from_secs(60)));
+                        continue;
+                    }
+                };
+
+                query_and_emit_today_summary(&app_handle, &conn);
+                last_local_date = local_date;
+            }
+
+            let delay = duration_until_next_local_day(now);
+            thread::sleep(delay.min(std::time::Duration::from_secs(60)));
+        }
+    });
+}
+
 /// 创建只读连接
 pub fn open_readonly(db_path: &PathBuf) -> Result<Connection, rusqlite::Error> {
     let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -123,6 +200,8 @@ impl DbManager {
     /// 启动专用写线程，返回 DbManager
     pub fn start(db_path: PathBuf, app_handle: AppHandle) -> Self {
         let (write_tx, write_rx) = mpsc::channel::<WriteRequest>();
+
+        start_midnight_refresh_thread(db_path.clone(), app_handle.clone());
 
         let writer_db_path = db_path.clone();
         thread::spawn(move || {
@@ -161,17 +240,11 @@ impl DbManager {
                         // 入库后查询今日汇总并广播
                         match queries::get_token_summary(&conn, "today") {
                             Ok(summary) => {
-                                let total = summary.total;
                                 log::info!(
                                     "[db] 今日汇总: total={}, input={}, output={}, cache_read={}, cache_create={}, agent_cost=${:.2}",
-                                    total, summary.input, summary.output, summary.cache_read, summary.cache_create, summary.agent_cost
+                                    summary.total, summary.input, summary.output, summary.cache_read, summary.cache_create, summary.agent_cost
                                 );
-                                let _ = app_handle.emit("token-updated", &summary);
-                                // 更新 tray title
-                                if let Some(tray) = app_handle.tray_by_id("main") {
-                                    let formatted = crate::commands::format_token_count(total);
-                                    let _ = tray.set_title(Some(&formatted));
-                                }
+                                emit_token_summary(&app_handle, &summary);
                             }
                             Err(e) => {
                                 log::error!("查询汇总失败: {}", e);
@@ -184,19 +257,7 @@ impl DbManager {
                             continue;
                         }
                         // 清理后查询今日汇总并广播（刷新 tray 和前端）
-                        match queries::get_token_summary(&conn, "today") {
-                            Ok(summary) => {
-                                let total = summary.total;
-                                let _ = app_handle.emit("token-updated", &summary);
-                                if let Some(tray) = app_handle.tray_by_id("main") {
-                                    let formatted = crate::commands::format_token_count(total);
-                                    let _ = tray.set_title(Some(&formatted));
-                                }
-                            }
-                            Err(e) => {
-                                log::error!("清理后查询汇总失败: {}", e);
-                            }
-                        }
+                        query_and_emit_today_summary(&app_handle, &conn);
                     }
                     WriteRequest::UpdateOffset { file_path, offset } => {
                         if let Err(e) = queries::update_offset(&conn, &file_path, offset) {
@@ -242,5 +303,14 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(SCHEMA_SQL).unwrap();
         conn.execute_batch(SCHEMA_SQL).unwrap();
+    }
+
+    #[test]
+    fn test_midnight_refresh_delay_targets_next_local_day() {
+        let now = chrono::Local::now();
+        let delay = super::duration_until_next_local_day(now);
+
+        assert!(delay >= std::time::Duration::from_secs(1));
+        assert!(delay <= std::time::Duration::from_secs(25 * 60 * 60));
     }
 }
