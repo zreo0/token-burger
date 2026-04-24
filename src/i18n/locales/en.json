@@ -39,7 +39,19 @@
         "enabled": "Enabled",
         "disabled": "Disabled",
         "unavailable": "Unavailable",
-        "notDetected": "Not Detected"
+        "notDetected": "Not Detected",
+        "about": "About",
+        "version": "Version",
+        "github": "GitHub",
+        "checkUpdate": "Check for Updates",
+        "checking": "Checking...",
+        "upToDate": "You're up to date",
+        "newVersion": "New version available: v{{version}}",
+        "download": "Download",
+        "later": "Later",
+        "downloading": "Downloading... {{progress}}%",
+        "readyToRestart": "Update ready. Restart to apply.",
+        "restart": "Restart Now"
     },
     "common": {
         "error": "Something went wrong",

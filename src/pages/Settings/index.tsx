@@ -1,13 +1,25 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
+import { check, Update } from '@tauri-apps/plugin-updater';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { AgentInfo, AppSettings, PlatformInfo } from '../../types';
 import { getPlatformInfo } from '../../utils/platform';
 import { BURGER_THEMES } from '../../components/Burger/themes';
 import './index.css';
 
-type Tab = 'general' | 'agents' | 'data';
+type Tab = 'general' | 'agents' | 'data' | 'about';
+
+type UpdateStatus =
+    | { state: 'idle' }
+    | { state: 'checking' }
+    | { state: 'no-update' }
+    | { state: 'update-available'; version: string; update: Update }
+    | { state: 'downloading'; progress: number }
+    | { state: 'ready-to-restart'; update: Update }
+    | { state: 'error'; message: string };
 
 function Settings() {
     const { t, i18n } = useTranslation();
@@ -16,6 +28,12 @@ function Settings() {
     const [agents, setAgents] = useState<AgentInfo[]>([]);
     const [platformInfo, setPlatformInfo] = useState<PlatformInfo | null>(null);
     const [confirmAction, setConfirmAction] = useState<string | null>(null);
+    const [appVersion, setAppVersion] = useState('');
+    const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ state: 'idle' });
+
+    useEffect(() => {
+        getVersion().then(setAppVersion).catch(() => {});
+    }, []);
 
     const loadSettings = useCallback(async () => {
         try {
@@ -70,12 +88,54 @@ function Settings() {
         }
     };
 
+    const handleCheckUpdate = async () => {
+        setUpdateStatus({ state: 'checking' });
+        try {
+            const update = await check();
+            if (update) {
+                setUpdateStatus({ state: 'update-available', version: update.version, update });
+            } else {
+                setUpdateStatus({ state: 'no-update' });
+                setTimeout(() => setUpdateStatus({ state: 'idle' }), 3000);
+            }
+        } catch {
+            // 检查失败（首次发布前无 latest.json、网络不通等），视为暂无更新
+            setUpdateStatus({ state: 'no-update' });
+            setTimeout(() => setUpdateStatus({ state: 'idle' }), 3000);
+        }
+    };
+
+    const handleDownloadUpdate = async (update: Update) => {
+        setUpdateStatus({ state: 'downloading', progress: 0 });
+        try {
+            let totalLength = 0;
+            let downloaded = 0;
+            await update.downloadAndInstall((event) => {
+                if (event.event === 'Started' && event.data.contentLength) {
+                    totalLength = event.data.contentLength;
+                } else if (event.event === 'Progress') {
+                    downloaded += event.data.chunkLength;
+                    const pct = totalLength > 0 ? Math.round((downloaded / totalLength) * 100) : 0;
+                    setUpdateStatus({ state: 'downloading', progress: pct });
+                } else if (event.event === 'Finished') {
+                    setUpdateStatus({ state: 'ready-to-restart', update });
+                }
+            });
+        } catch {
+            setUpdateStatus({ state: 'error', message: t('common.error') });
+        }
+    };
+
+    const handleRestart = async (update: Update) => {
+        await update.install();
+    };
+
     return (
         <div className="settings-shell">
             <div className="settings-container">
                 <div className="settings-header">
                     <div className="settings-tabs">
-                        {(['general', 'agents', 'data'] as Tab[]).map((t_) => (
+                        {(['general', 'agents', 'data', 'about'] as Tab[]).map((t_) => (
                             <button
                                 key={t_}
                                 type="button"
@@ -248,6 +308,103 @@ function Settings() {
                                                         {t('settings.clearAll')}
                                                     </button>
                                                 </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </>
+                            )}
+                            {tab === 'about' && (
+                                <>
+                                    <div className="settings-group">
+                                        <div className="setting-row">
+                                            <span className="setting-label">{t('settings.version')}</span>
+                                            <span className="setting-value">{appVersion}</span>
+                                        </div>
+                                        <div className="setting-divider" />
+                                        <div className="setting-row">
+                                            <span className="setting-label">{t('settings.github')}</span>
+                                            <button
+                                                type="button"
+                                                className="about-link"
+                                                onClick={() => openUrl('https://github.com/zreo0/token-burger')}
+                                            >
+                                                zreo0/token-burger
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="settings-group">
+                                        {updateStatus.state === 'idle' && (
+                                            <div className="setting-row about-update-row">
+                                                <button type="button" className="mac-btn about-update-btn" onClick={handleCheckUpdate}>
+                                                    {t('settings.checkUpdate')}
+                                                </button>
+                                            </div>
+                                        )}
+                                        {updateStatus.state === 'checking' && (
+                                            <div className="setting-row about-update-row">
+                                                <span className="about-status-text">{t('settings.checking')}</span>
+                                            </div>
+                                        )}
+                                        {updateStatus.state === 'no-update' && (
+                                            <div className="setting-row about-update-row">
+                                                <span className="about-status-text about-success">{t('settings.upToDate')}</span>
+                                            </div>
+                                        )}
+                                        {updateStatus.state === 'update-available' && (
+                                            <div className="setting-row about-update-row about-update-available">
+                                                <span className="about-status-text">
+                                                    {t('settings.newVersion', { version: updateStatus.version })}
+                                                </span>
+                                                <div className="action-buttons">
+                                                    <button
+                                                        type="button"
+                                                        className="mac-btn"
+                                                        onClick={() => setUpdateStatus({ state: 'idle' })}
+                                                    >
+                                                        {t('settings.later')}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        className="mac-btn about-primary-btn"
+                                                        onClick={() => handleDownloadUpdate(updateStatus.update)}
+                                                    >
+                                                        {t('settings.download')}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+                                        {updateStatus.state === 'downloading' && (
+                                            <div className="setting-row about-update-row about-downloading">
+                                                <span className="about-status-text">
+                                                    {t('settings.downloading', { progress: updateStatus.progress })}
+                                                </span>
+                                                <div className="about-progress-bar">
+                                                    <div
+                                                        className="about-progress-fill"
+                                                        style={{ width: `${updateStatus.progress}%` }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+                                        {updateStatus.state === 'ready-to-restart' && (
+                                            <div className="setting-row about-update-row about-update-available">
+                                                <span className="about-status-text">{t('settings.readyToRestart')}</span>
+                                                <button
+                                                    type="button"
+                                                    className="mac-btn about-primary-btn"
+                                                    onClick={() => handleRestart(updateStatus.update)}
+                                                >
+                                                    {t('settings.restart')}
+                                                </button>
+                                            </div>
+                                        )}
+                                        {updateStatus.state === 'error' && (
+                                            <div className="setting-row about-update-row about-error-row">
+                                                <span className="about-status-text about-error-text">{updateStatus.message}</span>
+                                                <button type="button" className="mac-btn" onClick={handleCheckUpdate}>
+                                                    {t('common.retry')}
+                                                </button>
                                             </div>
                                         )}
                                     </div>

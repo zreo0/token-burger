@@ -386,6 +386,94 @@
 }
 
 /* Dark Mode */
+
+/* About Tab */
+.settings-container .setting-value {
+    font-size: 13px;
+    color: rgba(0, 0, 0, 0.5);
+    font-weight: 500;
+}
+
+.settings-container .about-link {
+    font-size: 13px;
+    font-weight: 500;
+    color: #007aff;
+    background: none;
+    border: none;
+    cursor: default;
+    padding: 0;
+}
+
+.settings-container .about-link:hover {
+    text-decoration: underline;
+}
+
+.settings-container .about-update-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+}
+
+.settings-container .about-update-available {
+    flex-direction: row;
+    align-items: center;
+}
+
+.settings-container .about-update-btn {
+    width: 100%;
+    text-align: center;
+    padding: 8px 12px;
+}
+
+.settings-container .about-primary-btn {
+    background: #007aff;
+    color: #ffffff;
+    border-color: #007aff;
+}
+
+.settings-container .about-primary-btn:active {
+    background: #0066d6;
+}
+
+.settings-container .about-status-text {
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(0, 0, 0, 0.6);
+}
+
+.settings-container .about-success {
+    color: #34c759;
+}
+
+.settings-container .about-error-row {
+    flex-direction: row;
+    align-items: center;
+}
+
+.settings-container .about-error-text {
+    color: #ff3b30;
+    flex: 1;
+    font-size: 12px;
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+.settings-container .about-progress-bar {
+    width: 100%;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.08);
+    overflow: hidden;
+}
+
+.settings-container .about-progress-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: #007aff;
+    transition: width 200ms ease;
+}
+
+/* Dark Mode */
 @media (prefers-color-scheme: dark) {
     .settings-shell {
         background: #1c1c1e;
@@ -518,5 +606,43 @@
 
     .settings-container .dev-mode-badge {
         color: rgba(255, 255, 255, 0.2);
+    }
+
+    .settings-container .setting-value {
+        color: rgba(255, 255, 255, 0.5);
+    }
+
+    .settings-container .about-link {
+        color: #0a84ff;
+    }
+
+    .settings-container .about-status-text {
+        color: rgba(255, 255, 255, 0.6);
+    }
+
+    .settings-container .about-success {
+        color: #30d158;
+    }
+
+    .settings-container .about-error-text {
+        color: #ff453a;
+    }
+
+    .settings-container .about-progress-bar {
+        background: rgba(255, 255, 255, 0.1);
+    }
+
+    .settings-container .about-progress-fill {
+        background: #0a84ff;
+    }
+
+    .settings-container .about-primary-btn {
+        background: #0a84ff;
+        border-color: #0a84ff;
+        color: #ffffff;
+    }
+
+    .settings-container .about-primary-btn:active {
+        background: #0070e0;
     }
 }
