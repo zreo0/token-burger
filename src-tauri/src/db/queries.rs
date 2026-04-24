@@ -16,10 +16,22 @@ pub fn batch_insert_token_logs(
         let tx = conn.unchecked_transaction()?;
         {
             let mut stmt = tx.prepare_cached(
-                "INSERT OR IGNORE INTO token_logs
+                "INSERT INTO token_logs
                  (agent_name, provider, model_id, token_type, token_count,
                   session_id, request_id, latency_ms, is_error, metadata, cost, timestamp)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                 ON CONFLICT(request_id, token_type) DO UPDATE SET
+                    agent_name = excluded.agent_name,
+                    provider = excluded.provider,
+                    model_id = excluded.model_id,
+                    token_count = excluded.token_count,
+                    session_id = excluded.session_id,
+                    latency_ms = excluded.latency_ms,
+                    is_error = excluded.is_error,
+                    metadata = excluded.metadata,
+                    cost = excluded.cost,
+                    timestamp = excluded.timestamp
+                 WHERE token_logs.agent_name = 'codex' AND token_logs.model_id = 'codex'",
             )?;
 
             for log in chunk {
@@ -316,12 +328,11 @@ mod tests {
                 50,
                 "req-1",
             ),
-            // 重复记录
             make_log(
                 "claude-code",
-                "claude-3-7-sonnet",
+                "claude-3-7-haiku",
                 TokenType::Input,
-                100,
+                120,
                 "req-1",
             ),
         ];
@@ -331,8 +342,37 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM token_logs", [], |row| row.get(0))
             .unwrap();
-        // 第三条重复应被 IGNORE
+        // 第三条重复应保持原有忽略语义，不新增行
         assert_eq!(count, 2);
+
+        let updated: (String, i64) = conn
+            .query_row(
+                "SELECT model_id, token_count FROM token_logs WHERE request_id = 'req-1' AND token_type = 'input'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(updated, ("claude-3-7-sonnet".into(), 100));
+    }
+
+    #[test]
+    fn test_codex_fallback_model_can_be_corrected() {
+        let conn = setup_db();
+        let logs = vec![
+            make_log("codex", "codex", TokenType::Input, 100, "req-1"),
+            make_log("codex", "gpt-5.5", TokenType::Input, 120, "req-1"),
+        ];
+
+        batch_insert_token_logs(&conn, &logs).unwrap();
+
+        let updated: (String, i64) = conn
+            .query_row(
+                "SELECT model_id, token_count FROM token_logs WHERE request_id = 'req-1' AND token_type = 'input'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(updated, ("gpt-5.5".into(), 120));
     }
 
     #[test]

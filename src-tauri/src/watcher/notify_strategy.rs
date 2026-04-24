@@ -9,7 +9,7 @@ use std::time::Duration;
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebouncedEvent};
 
-use crate::adapters::all_adapters;
+use crate::adapters::{all_adapters, codex};
 use crate::db::WriteRequest;
 
 /// 基于 notify-debouncer-full 的实时监听策略
@@ -28,6 +28,7 @@ pub fn run_notify_polling(
     let mut path_to_adapter: HashMap<String, usize> = HashMap::new();
     // path → file size（用于增量读取），初始化时优先使用 DB 中的 offset
     let mut file_offsets: HashMap<String, u64> = initial_offsets;
+    let mut codex_model_cache: HashMap<String, String> = HashMap::new();
     let adapters = all_adapters();
 
     // 设置 debouncer 通道
@@ -97,6 +98,7 @@ pub fn run_notify_polling(
                     &adapters,
                     &path_to_adapter,
                     &mut file_offsets,
+                    &mut codex_model_cache,
                     &write_tx,
                 );
             }
@@ -135,6 +137,7 @@ fn process_events(
     adapters: &[Box<dyn crate::adapters::AgentAdapter>],
     path_to_adapter: &HashMap<String, usize>,
     file_offsets: &mut HashMap<String, u64>,
+    codex_model_cache: &mut HashMap<String, String>,
     write_tx: &Sender<WriteRequest>,
 ) {
     for event in events {
@@ -159,6 +162,7 @@ fn process_events(
 
             if new_size < prev_offset {
                 // 文件被截断/轮转，从头重新读取
+                codex_model_cache.remove(&path_str);
                 log::info!(
                     "[notify] {}: 文件轮转检测 offset {}→{}, 从头读取",
                     agent_name,
@@ -166,7 +170,14 @@ fn process_events(
                     new_size
                 );
                 if let Ok(content) = read_from_offset(path, 0) {
-                    let logs = adapter.parse_content(&content);
+                    let logs = if agent_name == "codex" {
+                        let parsed =
+                            codex::parse_content_with_model(&content, codex::DEFAULT_CODEX_MODEL);
+                        codex_model_cache.insert(path_str.clone(), parsed.final_model);
+                        parsed.logs
+                    } else {
+                        adapter.parse_content(&content)
+                    };
                     if !logs.is_empty() {
                         log::info!(
                             "[notify] {}: 解析 {} 条记录 (轮转重读)",
@@ -189,9 +200,15 @@ fn process_events(
                 continue;
             }
 
-            // 读取增量内容
-            if let Ok(content) = read_from_offset(path, prev_offset) {
-                let logs = adapter.parse_content(&content);
+            // 解析新增内容
+            if let Ok(logs) = parse_changed_content(
+                path,
+                &path_str,
+                prev_offset,
+                agent_name,
+                adapter.as_ref(),
+                codex_model_cache,
+            ) {
                 if !logs.is_empty() {
                     // 汇总关键信息：agent、记录数、token 总量
                     let total_tokens: i64 = logs.iter().map(|l| l.token_count).sum();
@@ -222,6 +239,30 @@ fn process_events(
     }
 }
 
+fn parse_changed_content(
+    path: &std::path::Path,
+    path_str: &str,
+    prev_offset: u64,
+    agent_name: &str,
+    adapter: &dyn crate::adapters::AgentAdapter,
+    codex_model_cache: &mut HashMap<String, String>,
+) -> std::io::Result<Vec<crate::adapters::TokenLog>> {
+    if agent_name != "codex" {
+        let content = read_from_offset(path, prev_offset)?;
+        return Ok(adapter.parse_content(&content));
+    }
+
+    let (content, initial_model) = match codex_model_cache.get(path_str) {
+        Some(model) => (read_from_offset(path, prev_offset)?, model.as_str()),
+        None => (std::fs::read_to_string(path)?, codex::DEFAULT_CODEX_MODEL),
+    };
+
+    let parsed = codex::parse_content_with_model(&content, initial_model);
+    codex_model_cache.insert(path_str.to_string(), parsed.final_model);
+
+    Ok(parsed.logs)
+}
+
 /// 从指定 offset 读取文件内容
 pub(crate) fn read_from_offset(path: &std::path::Path, offset: u64) -> std::io::Result<String> {
     use std::io::{Read, Seek, SeekFrom};
@@ -230,4 +271,95 @@ pub(crate) fn read_from_offset(path: &std::path::Path, offset: u64) -> std::io::
     let mut content = String::new();
     file.read_to_string(&mut content)?;
     Ok(content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::codex::CodexAdapter;
+    use std::io::Write;
+
+    #[test]
+    fn codex_cache_miss_recovers_model_then_incremental_uses_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let initial = r#"{"type":"turn_context","payload":{"model":"gpt-5.4"}}
+{"timestamp":"2026-01-14T07:23:24.629Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1}}}}
+"#;
+        std::fs::write(&path, initial).unwrap();
+        let path_str = path.to_string_lossy().to_string();
+        let adapter = CodexAdapter;
+        let mut cache = HashMap::new();
+
+        let logs = parse_changed_content(
+            &path,
+            &path_str,
+            initial.len() as u64,
+            "codex",
+            &adapter,
+            &mut cache,
+        )
+        .unwrap();
+
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].model_id, "gpt-5.4");
+        assert_eq!(cache.get(&path_str).map(String::as_str), Some("gpt-5.4"));
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        let incremental = r#"{"timestamp":"2026-01-14T07:24:24.629Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":2}}}}
+"#;
+        file.write_all(incremental.as_bytes()).unwrap();
+
+        let logs = parse_changed_content(
+            &path,
+            &path_str,
+            initial.len() as u64,
+            "codex",
+            &adapter,
+            &mut cache,
+        )
+        .unwrap();
+
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].model_id, "gpt-5.4");
+        assert_eq!(logs[0].token_count, 2);
+    }
+
+    #[test]
+    fn codex_incremental_model_switch_updates_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let initial = r#"{"type":"turn_context","payload":{"model":"gpt-5.4"}}
+"#;
+        std::fs::write(&path, initial).unwrap();
+        let path_str = path.to_string_lossy().to_string();
+        let adapter = CodexAdapter;
+        let mut cache = HashMap::from([(path_str.clone(), "gpt-5.4".to_string())]);
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        let incremental = r#"{"type":"turn_context","payload":{"model":"gpt-5.5"}}
+{"timestamp":"2026-01-14T07:24:24.629Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":2}}}}
+"#;
+        file.write_all(incremental.as_bytes()).unwrap();
+
+        let logs = parse_changed_content(
+            &path,
+            &path_str,
+            initial.len() as u64,
+            "codex",
+            &adapter,
+            &mut cache,
+        )
+        .unwrap();
+
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].model_id, "gpt-5.5");
+        assert_eq!(cache.get(&path_str).map(String::as_str), Some("gpt-5.5"));
+    }
 }
