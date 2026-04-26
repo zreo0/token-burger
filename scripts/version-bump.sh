@@ -1,34 +1,42 @@
 #!/usr/bin/env bash
 # 同步 package.json / package-lock.json / tauri.conf.json / Cargo.toml / Cargo.lock 中的版本号
-# 用法: ./scripts/version-bump.sh <version>
+# 用法: ./scripts/version-bump.sh [version]
 # 示例: ./scripts/version-bump.sh 0.2.0
+# 不传 version 时，自动递增 patch 版本
 
 set -euo pipefail
 
-VERSION="${1:-}"
+VERSION_INPUT="${1:-}"
 
-if [ -z "$VERSION" ]; then
-    echo "用法: $0 <version>"
+if [ "$#" -gt 1 ]; then
+    echo "用法: $0 [version]"
     echo "示例: $0 0.2.0"
+    echo "不传 version 时，自动递增 patch 版本"
     exit 1
 fi
 
-# 校验版本号格式 (semver)
-if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+# 校验手动版本号格式 (semver)
+if [ -n "$VERSION_INPUT" ] && ! echo "$VERSION_INPUT" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
     echo "错误: 版本号格式不正确，应为 semver 格式 (例: 1.2.3 或 1.2.3-beta.1)"
     exit 1
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+VERSION_TARGET="${VERSION_INPUT:-patch}"
 
-echo "📦 更新版本号为 $VERSION ..."
+if [ -z "$VERSION_INPUT" ]; then
+    echo "📦 未指定版本号，自动递增 patch 版本 ..."
+else
+    echo "📦 更新版本号为 $VERSION_INPUT ..."
+fi
 
 # 1. package.json / package-lock.json
-(
+NPM_VERSION_OUTPUT="$(
     cd "$ROOT_DIR"
-    npm version "$VERSION" --no-git-tag-version --ignore-scripts --allow-same-version >/dev/null
-)
+    npm version "$VERSION_TARGET" --no-git-tag-version --ignore-scripts --allow-same-version
+)"
+VERSION="$(printf '%s\n' "$NPM_VERSION_OUTPUT" | tail -n 1 | sed 's/^v//')"
 echo "  ✅ package.json"
 echo "  ✅ package-lock.json"
 
@@ -77,6 +85,11 @@ if [ "$CONFIRM" = "yes" ]; then
         "$ROOT_DIR/src-tauri/Cargo.lock"
     )
 
+    if git -C "$ROOT_DIR" show-ref --verify --quiet "refs/tags/v$VERSION"; then
+        echo "错误: tag v$VERSION 已存在"
+        exit 1
+    fi
+
     git -C "$ROOT_DIR" add -- "${VERSION_FILES[@]}"
 
     if git -C "$ROOT_DIR" diff --cached --quiet -- "${VERSION_FILES[@]}"; then
@@ -88,5 +101,5 @@ if [ "$CONFIRM" = "yes" ]; then
         echo "✅ 已创建 tag v$VERSION"
     fi
 else
-    echo "已跳过 git add / commit"
+    echo "已跳过 git add / commit / tag"
 fi
