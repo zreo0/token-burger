@@ -101,7 +101,7 @@ fn parse_codex_line(
         .get("info")
         .and_then(|info| info.get("last_token_usage"))?;
 
-    let input = usage
+    let total_input = usage
         .get("input_tokens")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
@@ -109,14 +109,24 @@ fn parse_codex_line(
         .get("cached_input_tokens")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    let output = usage
+    let input = total_input.saturating_sub(cache_read);
+    let output_tokens = usage
         .get("output_tokens")
         .and_then(|v| v.as_i64())
-        .unwrap_or(0)
-        + usage
-            .get("reasoning_output_tokens")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
+        .unwrap_or(0);
+    let reasoning_output_tokens = usage
+        .get("reasoning_output_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let total_tokens = usage
+        .get("total_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let output = if total_tokens == total_input + output_tokens + reasoning_output_tokens {
+        output_tokens + reasoning_output_tokens
+    } else {
+        output_tokens
+    };
 
     if input == 0 && cache_read == 0 && output == 0 {
         return None;
@@ -173,7 +183,7 @@ mod tests {
 
         assert_eq!(logs.len(), 3);
         assert_eq!(logs[0].token_type, TokenType::Input);
-        assert_eq!(logs[0].token_count, 8079);
+        assert_eq!(logs[0].token_count, 271);
         assert_eq!(logs[0].provider, "OpenAI");
         assert_eq!(logs[0].model_id, "gpt-5.5");
         assert_eq!(logs[1].token_type, TokenType::CacheRead);
@@ -184,6 +194,22 @@ mod tests {
             logs[2].request_id.as_deref(),
             Some("codex-2026-01-14T07:23:24.629Z-output")
         );
+    }
+
+    #[test]
+    fn test_parse_codex_token_count_when_output_includes_reasoning() {
+        let line = r#"{"type":"turn_context","payload":{"model":"gpt-5.5"}}
+{"timestamp":"2026-04-25T17:09:13.596Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":60531,"cached_input_tokens":59776,"output_tokens":514,"reasoning_output_tokens":63,"total_tokens":61045}}}}"#;
+        let adapter = CodexAdapter;
+        let logs = adapter.parse_content(line);
+
+        assert_eq!(logs.len(), 3);
+        assert_eq!(logs[0].token_type, TokenType::Input);
+        assert_eq!(logs[0].token_count, 755);
+        assert_eq!(logs[1].token_type, TokenType::CacheRead);
+        assert_eq!(logs[1].token_count, 59776);
+        assert_eq!(logs[2].token_type, TokenType::Output);
+        assert_eq!(logs[2].token_count, 514);
     }
 
     #[test]
