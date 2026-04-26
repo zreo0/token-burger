@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 同步 package.json / tauri.conf.json / Cargo.toml 中的版本号
+# 同步 package.json / package-lock.json / tauri.conf.json / Cargo.toml / Cargo.lock 中的版本号
 # 用法: ./scripts/version-bump.sh <version>
 # 示例: ./scripts/version-bump.sh 0.2.0
 
@@ -24,10 +24,13 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "📦 更新版本号为 $VERSION ..."
 
-# 1. package.json
-sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" "$ROOT_DIR/package.json"
-rm -f "$ROOT_DIR/package.json.bak"
+# 1. package.json / package-lock.json
+(
+    cd "$ROOT_DIR"
+    npm version "$VERSION" --no-git-tag-version --ignore-scripts --allow-same-version >/dev/null
+)
 echo "  ✅ package.json"
+echo "  ✅ package-lock.json"
 
 # 2. src-tauri/tauri.conf.json
 sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" "$ROOT_DIR/src-tauri/tauri.conf.json"
@@ -39,11 +42,51 @@ sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" "$ROOT_DIR/src-tauri/Ca
 rm -f "$ROOT_DIR/src-tauri/Cargo.toml.bak"
 echo "  ✅ src-tauri/Cargo.toml"
 
+# 4. src-tauri/Cargo.lock (仅替换 token-burger 包条目)
+VERSION="$VERSION" perl -0pi.bak -e 's/(\[\[package\]\]\nname = "token-burger"\nversion = ")[^"]+(")/$1$ENV{VERSION}$2/' "$ROOT_DIR/src-tauri/Cargo.lock"
+rm -f "$ROOT_DIR/src-tauri/Cargo.lock.bak"
+
+if ! awk -v version="$VERSION" '
+    previous == "name = \"token-burger\"" && $0 == "version = \"" version "\"" {
+        found = 1
+    }
+    {
+        previous = $0
+    }
+    END {
+        exit found ? 0 : 1
+    }
+' "$ROOT_DIR/src-tauri/Cargo.lock"; then
+    echo "错误: 未能更新 src-tauri/Cargo.lock 中 token-burger 的版本号"
+    exit 1
+fi
+echo "  ✅ src-tauri/Cargo.lock"
+
 echo ""
 echo "🎉 版本号已同步为 $VERSION"
 echo ""
-echo "后续步骤:"
-echo "  git add -A"
-echo "  git commit -m \"chore: bump version to $VERSION\""
-echo "  git tag v$VERSION"
-echo "  git push origin main --tags"
+CONFIRM=""
+read -r -p "是否自动暂存指定版本文件并提交？输入 yes 确认: " CONFIRM || true
+
+if [ "$CONFIRM" = "yes" ]; then
+    VERSION_FILES=(
+        "$ROOT_DIR/package.json"
+        "$ROOT_DIR/package-lock.json"
+        "$ROOT_DIR/src-tauri/tauri.conf.json"
+        "$ROOT_DIR/src-tauri/Cargo.toml"
+        "$ROOT_DIR/src-tauri/Cargo.lock"
+    )
+
+    git -C "$ROOT_DIR" add -- "${VERSION_FILES[@]}"
+
+    if git -C "$ROOT_DIR" diff --cached --quiet -- "${VERSION_FILES[@]}"; then
+        echo "没有可提交的版本号变更"
+    else
+        git -C "$ROOT_DIR" commit -m "chore: bump version to $VERSION" -- "${VERSION_FILES[@]}"
+        git -C "$ROOT_DIR" tag "v$VERSION"
+        echo "✅ 已提交版本号变更"
+        echo "✅ 已创建 tag v$VERSION"
+    fi
+else
+    echo "已跳过 git add / commit"
+fi
