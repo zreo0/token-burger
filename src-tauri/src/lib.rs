@@ -107,6 +107,11 @@ fn position_popup_window<R: Runtime>(app: &AppHandle<R>, popup: &WebviewWindow<R
     }
 }
 
+#[tauri::command]
+fn restart_app(app: AppHandle) {
+    app.request_restart();
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
@@ -297,6 +302,7 @@ pub fn run() {
             commands::update_settings,
             commands::get_pricing,
             commands::get_platform_info,
+            restart_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

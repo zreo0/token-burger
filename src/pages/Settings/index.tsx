@@ -99,9 +99,8 @@ function Settings() {
                 setTimeout(() => setUpdateStatus({ state: 'idle' }), 3000);
             }
         } catch {
-            // 检查失败（首次发布前无 latest.json、网络不通等），视为暂无更新
-            setUpdateStatus({ state: 'no-update' });
-            setTimeout(() => setUpdateStatus({ state: 'idle' }), 3000);
+            // 获取更新失败时不展示具体错误细节，但需要和“已是最新版”区分开。
+            setUpdateStatus({ state: 'error', message: t('settings.updateCheckFailed') });
         }
     };
 
@@ -126,8 +125,8 @@ function Settings() {
         }
     };
 
-    const handleRestart = async (update: Update) => {
-        await update.install();
+    const handleRestart = async () => {
+        await invoke('restart_app');
     };
 
     return (
@@ -393,7 +392,7 @@ function Settings() {
                                                 <button
                                                     type="button"
                                                     className="mac-btn about-primary-btn"
-                                                    onClick={() => handleRestart(updateStatus.update)}
+                                                    onClick={handleRestart}
                                                 >
                                                     {t('settings.restart')}
                                                 </button>

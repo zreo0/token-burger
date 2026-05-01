@@ -46,6 +46,7 @@
         "checkUpdate": "Check for Updates",
         "checking": "Checking...",
         "upToDate": "You're up to date",
+        "updateCheckFailed": "Failed to fetch updates",
         "newVersion": "New version available: v{{version}}",
         "download": "Download",
         "later": "Later",

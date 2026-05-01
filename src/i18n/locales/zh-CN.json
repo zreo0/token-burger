@@ -46,6 +46,7 @@
         "checkUpdate": "检查更新",
         "checking": "检查中...",
         "upToDate": "已是最新版本",
+        "updateCheckFailed": "获取更新失败",
         "newVersion": "发现新版本：v{{version}}",
         "download": "下载更新",
         "later": "稍后",
