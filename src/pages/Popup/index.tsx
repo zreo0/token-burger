@@ -7,6 +7,7 @@ import Burger from '../../components/Burger';
 import ErrorBoundary from '../../components/ErrorBoundary';
 import { formatTokenCount, formatCost } from '../../utils/format';
 import { calculateTotalCost } from '../../utils/pricing';
+import { getPlatformInfo } from '../../utils/platform';
 import { DEFAULT_THEME_ID } from '../../components/Burger/themes';
 import type { AppSettings, ColdStartProgress, PricingTable, TimeRange, TokenBreakdown } from '../../types';
 import './index.css';
@@ -38,6 +39,7 @@ export function Popup() {
     const [pricing, setPricing] = useState<PricingTable>({});
     const [pricingReady, setPricingReady] = useState(false);
     const [colorTheme, setColorTheme] = useState(DEFAULT_THEME_ID);
+    const [isWindows, setIsWindows] = useState(false);
 
     useEffect(() => {
         invoke<PricingTable>('get_pricing')
@@ -47,6 +49,10 @@ export function Popup() {
 
         invoke<AppSettings>('get_settings')
             .then((s) => { if (s.color_theme) setColorTheme(s.color_theme); })
+            .catch(() => {});
+
+        getPlatformInfo()
+            .then((info) => setIsWindows(info.platform === 'windows'))
             .catch(() => {});
     }, []);
 
@@ -88,7 +94,7 @@ export function Popup() {
     }
 
     return (
-        <div className="popup-container">
+        <div className={`popup-container${isWindows ? ' windows' : ''}`}>
             {/* 时间范围选择器 */}
             <div className="segmented-control">
                 {TIME_RANGES.map(({ key, labelKey }) => (

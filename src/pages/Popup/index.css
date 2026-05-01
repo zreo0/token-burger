@@ -17,6 +17,10 @@
     user-select: none;
 }
 
+.popup-container.windows {
+    border-radius: 0;
+}
+
 @media (prefers-color-scheme: dark) {
     .popup-container {
         color: rgba(245, 245, 247, 0.94);

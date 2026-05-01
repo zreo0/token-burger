@@ -62,7 +62,14 @@ fn ensure_popup_window<R: Runtime>(
     }
 
     let (x, y) = get_popup_initial_position(app, rect);
-    let popup = tauri::WebviewWindowBuilder::new(
+
+    #[cfg(target_os = "windows")]
+    let transparent = false;
+
+    #[cfg(not(target_os = "windows"))]
+    let transparent = true;
+
+    let popup_builder = tauri::WebviewWindowBuilder::new(
         app,
         POPUP_WINDOW_LABEL,
         WebviewUrl::App("index.html".into()),
@@ -71,12 +78,17 @@ fn ensure_popup_window<R: Runtime>(
     .inner_size(POPUP_WINDOW_WIDTH, POPUP_WINDOW_HEIGHT)
     .resizable(false)
     .decorations(false)
-    .transparent(true)
-    .visible(false)
-    .visible_on_all_workspaces(true)
-    .focused(false)
-    .position(x, y)
-    .build()?;
+    .transparent(transparent);
+
+    #[cfg(target_os = "windows")]
+    let popup_builder = popup_builder.shadow(false);
+
+    let popup = popup_builder
+        .visible(false)
+        .visible_on_all_workspaces(true)
+        .focused(false)
+        .position(x, y)
+        .build()?;
 
     attach_popup_auto_hide(&popup);
 
