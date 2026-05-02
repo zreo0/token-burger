@@ -7,7 +7,6 @@ mod types;
 mod watcher;
 
 use tauri::{
-    menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, LogicalPosition, Manager, Rect, Runtime, WebviewUrl, WebviewWindow,
 };
@@ -159,17 +158,27 @@ pub fn run() {
                                 .unwrap_or(None)
                                 .and_then(|v| v.parse().ok())
                                 .unwrap_or(defaults.polling_interval_secs);
-                        (enabled_agents, keep_days, watch_mode, polling_interval_secs)
+                        let language = db::queries::get_setting(&c, "language")
+                            .unwrap_or(None)
+                            .unwrap_or(defaults.language.clone());
+                        (
+                            enabled_agents,
+                            keep_days,
+                            watch_mode,
+                            polling_interval_secs,
+                            language,
+                        )
                     }
                     None => (
                         defaults.enabled_agents,
                         defaults.keep_days,
                         defaults.watch_mode,
                         defaults.polling_interval_secs,
+                        defaults.language,
                     ),
                 }
             };
-            let (enabled_agents, keep_days, watch_mode, polling_interval_secs) = settings;
+            let (enabled_agents, keep_days, watch_mode, polling_interval_secs, language) = settings;
 
             // 注册共享状态
             let db_path_str = db_path.to_string_lossy().to_string();
@@ -213,13 +222,7 @@ pub fn run() {
             let icon = tauri::include_image!("icons/icon.png");
 
             // 构建右键上下文菜单
-            let settings_item = MenuItemBuilder::with_id("settings", "Settings").build(app)?;
-            let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
-            let menu = MenuBuilder::new(app)
-                .item(&settings_item)
-                .separator()
-                .item(&quit_item)
-                .build()?;
+            let menu = commands::build_tray_menu(app.handle(), &language)?;
 
             // 创建 tray icon
             let _tray = TrayIconBuilder::with_id("main")

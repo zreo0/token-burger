@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{
+    menu::{Menu, MenuBuilder, MenuItemBuilder},
+    AppHandle, Emitter, State,
+};
 
 use crate::adapters;
 use crate::db;
@@ -14,6 +17,35 @@ pub struct AppState {
     pub pricing: PricingTable,
     pub watcher: Mutex<Option<watcher::WatcherEngine>>,
     pub write_tx: Mutex<std::sync::mpsc::Sender<db::WriteRequest>>,
+}
+
+pub fn tray_menu_labels(language: &str) -> (&'static str, &'static str) {
+    if language == "zh-CN" {
+        ("设置", "退出")
+    } else {
+        ("Settings", "Quit")
+    }
+}
+
+pub fn build_tray_menu(app: &AppHandle, language: &str) -> tauri::Result<Menu<tauri::Wry>> {
+    let (settings_label, quit_label) = tray_menu_labels(language);
+    let settings_item = MenuItemBuilder::with_id("settings", settings_label).build(app)?;
+    let quit_item = MenuItemBuilder::with_id("quit", quit_label).build(app)?;
+
+    MenuBuilder::new(app)
+        .item(&settings_item)
+        .separator()
+        .item(&quit_item)
+        .build()
+}
+
+fn update_tray_menu_language(app: &AppHandle, language: &str) -> Result<(), String> {
+    if let Some(tray) = app.tray_by_id("main") {
+        let menu = build_tray_menu(app, language).map_err(|e| e.to_string())?;
+        tray.set_menu(Some(menu)).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 fn db_path_from(state: &AppState) -> PathBuf {
@@ -209,6 +241,7 @@ pub fn update_settings(
     drop(conn);
 
     if key == "language" {
+        update_tray_menu_language(&app, &value)?;
         let _ = app.emit("settings-language-changed", &value);
     }
 
