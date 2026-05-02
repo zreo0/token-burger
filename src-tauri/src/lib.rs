@@ -206,7 +206,10 @@ pub fn run() {
                 write_tx: std::sync::Mutex::new(write_tx_for_state),
             });
 
-            // 使用编译时嵌入的图标
+            // 使用编译时嵌入的图标，Windows 使用白色版本以适配深色任务栏
+            #[cfg(target_os = "windows")]
+            let icon = tauri::include_image!("icons/icon-windows.png");
+            #[cfg(not(target_os = "windows"))]
             let icon = tauri::include_image!("icons/icon.png");
 
             // 构建右键上下文菜单
