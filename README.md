@@ -76,3 +76,12 @@ token-burger/
 | `cd src-tauri && cargo test` | 运行 Rust 测试 |
 | `npm run tauri dev` | Tauri 开发模式 |
 | `npm run tauri build` | Tauri 生产构建 |
+
+# 许可
+
+MIT License
+
+
+# 讨论与交流
+
+欢迎在 Github Issues、[LINUX DO](https://linux.do) 社区讨论功能需求、使用反馈以及 BUG 报告。
