@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useLayoutEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -40,6 +40,14 @@ export function Popup() {
     const [pricingReady, setPricingReady] = useState(false);
     const [colorTheme, setColorTheme] = useState(DEFAULT_THEME_ID);
     const [isWindows, setIsWindows] = useState(false);
+
+    useLayoutEffect(() => {
+        document.body.classList.add('popup-window');
+
+        return () => {
+            document.body.classList.remove('popup-window');
+        };
+    }, []);
 
     useEffect(() => {
         invoke<PricingTable>('get_pricing')

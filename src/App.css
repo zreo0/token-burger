@@ -38,9 +38,19 @@ body {
     background: #f2f2f7;
 }
 
+body.popup-window,
+body.popup-window #root {
+    background: transparent;
+}
+
 @media (prefers-color-scheme: dark) {
     body,
     #root {
         background: #1c1c1e;
+    }
+
+    body.popup-window,
+    body.popup-window #root {
+        background: transparent;
     }
 }
