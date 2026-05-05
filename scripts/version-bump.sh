@@ -99,6 +99,7 @@ if [ "$CONFIRM" = "yes" ]; then
         git -C "$ROOT_DIR" tag "v$VERSION"
         echo "✅ 已提交版本号变更"
         echo "✅ 已创建 tag v$VERSION"
+        echo "提交和 tag 已准备好推送到远程仓库，使用 git push origin main --tags"
     fi
 else
     echo "已跳过 git add / commit / tag"
