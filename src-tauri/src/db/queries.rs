@@ -1,9 +1,19 @@
 use std::collections::HashMap;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, params_from_iter, Connection};
 
 use crate::adapters::TokenLog;
-use crate::types::TokenSummary;
+use crate::types::{AppSettings, TokenSummary};
+
+pub fn get_enabled_agents(conn: &Connection) -> Vec<String> {
+    let defaults = AppSettings::default();
+    let enabled_str = get_setting(conn, "enabled_agents").unwrap_or(None);
+
+    match enabled_str {
+        Some(s) => serde_json::from_str(&s).unwrap_or(defaults.enabled_agents),
+        None => defaults.enabled_agents,
+    }
+}
 
 /// 批量插入 TokenLog（1000 条分批事务）
 pub fn batch_insert_token_logs(
@@ -62,22 +72,40 @@ pub fn batch_insert_token_logs(
 }
 
 /// 获取指定时间范围的 token 汇总
+#[cfg(test)]
 pub fn get_token_summary(conn: &Connection, range: &str) -> Result<TokenSummary, rusqlite::Error> {
+    get_token_summary_filtered(conn, range, None)
+}
+
+pub fn get_token_summary_for_agents(
+    conn: &Connection,
+    range: &str,
+    enabled_agents: &[String],
+) -> Result<TokenSummary, rusqlite::Error> {
+    get_token_summary_filtered(conn, range, Some(enabled_agents))
+}
+
+fn get_token_summary_filtered(
+    conn: &Connection,
+    range: &str,
+    enabled_agents: Option<&[String]>,
+) -> Result<TokenSummary, rusqlite::Error> {
     let time_filter = match range {
         "today" => "date(timestamp, 'localtime') = date('now', 'localtime')",
         "7d" => "datetime(timestamp, 'localtime') >= datetime('now', '-7 days', 'localtime')",
         "30d" => "datetime(timestamp, 'localtime') >= datetime('now', '-30 days', 'localtime')",
         _ => "date(timestamp, 'localtime') = date('now', 'localtime')",
     };
+    let agent_filter = build_agent_filter(enabled_agents);
 
     let sql = format!(
         "SELECT token_type, COALESCE(SUM(token_count), 0)
-         FROM token_logs WHERE {} GROUP BY token_type",
-        time_filter
+         FROM token_logs WHERE {}{} GROUP BY token_type",
+        time_filter, agent_filter
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map(params_from_iter(agent_params(enabled_agents)), |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
     })?;
 
@@ -98,10 +126,10 @@ pub fn get_token_summary(conn: &Connection, range: &str) -> Result<TokenSummary,
     }
 
     // 按 agent 分组
-    let by_agent = get_grouped_summary(conn, time_filter, "agent_name")?;
+    let by_agent = get_grouped_summary(conn, time_filter, "agent_name", enabled_agents)?;
     // 按 model 分组
-    let by_model = get_grouped_summary(conn, time_filter, "model_id")?;
-    let agent_cost = get_agent_cost_summary(conn, range)?;
+    let by_model = get_grouped_summary(conn, time_filter, "model_id", enabled_agents)?;
+    let agent_cost = get_agent_cost_summary_filtered(conn, range, enabled_agents)?;
 
     Ok(TokenSummary {
         input,
@@ -116,20 +144,34 @@ pub fn get_token_summary(conn: &Connection, range: &str) -> Result<TokenSummary,
 }
 
 /// 获取指定时间范围内 agent 自带 cost 的汇总
+#[cfg(test)]
 pub fn get_agent_cost_summary(conn: &Connection, range: &str) -> Result<f64, rusqlite::Error> {
+    get_agent_cost_summary_filtered(conn, range, None)
+}
+
+fn get_agent_cost_summary_filtered(
+    conn: &Connection,
+    range: &str,
+    enabled_agents: Option<&[String]>,
+) -> Result<f64, rusqlite::Error> {
     let time_filter = match range {
         "today" => "date(timestamp, 'localtime') = date('now', 'localtime')",
         "7d" => "datetime(timestamp, 'localtime') >= datetime('now', '-7 days', 'localtime')",
         "30d" => "datetime(timestamp, 'localtime') >= datetime('now', '-30 days', 'localtime')",
         _ => "date(timestamp, 'localtime') = date('now', 'localtime')",
     };
+    let agent_filter = build_agent_filter(enabled_agents);
 
     let sql = format!(
-        "SELECT COALESCE(SUM(cost), 0.0) FROM token_logs WHERE {} AND cost IS NOT NULL",
-        time_filter
+        "SELECT COALESCE(SUM(cost), 0.0) FROM token_logs WHERE {}{} AND cost IS NOT NULL",
+        time_filter, agent_filter
     );
 
-    conn.query_row(&sql, [], |row| row.get(0))
+    conn.query_row(
+        &sql,
+        params_from_iter(agent_params(enabled_agents)),
+        |row| row.get(0),
+    )
 }
 
 /// 按指定字段分组查询 token 汇总
@@ -137,15 +179,17 @@ fn get_grouped_summary(
     conn: &Connection,
     time_filter: &str,
     group_field: &str,
+    enabled_agents: Option<&[String]>,
 ) -> Result<HashMap<String, crate::types::TokenBreakdown>, rusqlite::Error> {
+    let agent_filter = build_agent_filter(enabled_agents);
     let sql = format!(
         "SELECT {}, token_type, COALESCE(SUM(token_count), 0), COALESCE(SUM(cost), 0.0)
-         FROM token_logs WHERE {} GROUP BY {}, token_type",
-        group_field, time_filter, group_field
+         FROM token_logs WHERE {}{} GROUP BY {}, token_type",
+        group_field, time_filter, agent_filter, group_field
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map(params_from_iter(agent_params(enabled_agents)), |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
@@ -168,6 +212,26 @@ fn get_grouped_summary(
         }
     }
     Ok(result)
+}
+
+fn build_agent_filter(enabled_agents: Option<&[String]>) -> String {
+    match enabled_agents {
+        Some([]) => " AND 1 = 0".to_string(),
+        Some(agents) => {
+            let placeholders = std::iter::repeat("?")
+                .take(agents.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(" AND agent_name IN ({})", placeholders)
+        }
+        None => String::new(),
+    }
+}
+
+fn agent_params(enabled_agents: Option<&[String]>) -> Vec<&str> {
+    enabled_agents
+        .map(|agents| agents.iter().map(String::as_str).collect())
+        .unwrap_or_default()
 }
 
 /// 清理数据
@@ -404,6 +468,38 @@ mod tests {
         assert_eq!(summary.agent_cost, 0.0);
         assert!(summary.by_agent.contains_key("claude-code"));
         assert!(summary.by_model.contains_key("gpt-4o"));
+    }
+
+    #[test]
+    fn test_token_summary_filters_enabled_agents() {
+        let conn = setup_db();
+        let logs = vec![
+            make_log(
+                "claude-code",
+                "claude-3-7-sonnet",
+                TokenType::Input,
+                1000,
+                "req-1",
+            ),
+            make_log("codex", "gpt-5.5", TokenType::Input, 500, "req-2"),
+            make_log("codex", "gpt-5.5", TokenType::Output, 200, "req-2"),
+        ];
+        batch_insert_token_logs(&conn, &logs).unwrap();
+
+        let enabled = vec!["codex".to_string()];
+        let summary = get_token_summary_for_agents(&conn, "today", &enabled).unwrap();
+
+        assert_eq!(summary.input, 500);
+        assert_eq!(summary.output, 200);
+        assert_eq!(summary.total, 700);
+        assert!(!summary.by_agent.contains_key("claude-code"));
+        assert!(summary.by_agent.contains_key("codex"));
+        assert!(summary.by_model.contains_key("gpt-5.5"));
+
+        let disabled_all = get_token_summary_for_agents(&conn, "today", &[]).unwrap();
+        assert_eq!(disabled_all.total, 0);
+        assert!(disabled_all.by_agent.is_empty());
+        assert!(disabled_all.by_model.is_empty());
     }
 
     #[test]

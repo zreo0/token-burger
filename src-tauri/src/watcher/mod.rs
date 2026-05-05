@@ -111,6 +111,20 @@ impl WatcherEngine {
     }
 }
 
+pub fn catch_up_adapters(
+    adapters: Vec<Box<dyn AgentAdapter>>,
+    write_tx: Sender<WriteRequest>,
+    keep_days: u32,
+    db_path: PathBuf,
+) {
+    thread::spawn(move || {
+        let known_offsets = offset::load_offsets_from_db(&db_path);
+        for adapter in adapters {
+            cold_start_adapter(adapter.as_ref(), &write_tx, keep_days, &known_offsets);
+        }
+    });
+}
+
 /// 冷启动：扫描单个 Adapter 的历史文件
 fn cold_start_adapter(
     adapter: &dyn AgentAdapter,

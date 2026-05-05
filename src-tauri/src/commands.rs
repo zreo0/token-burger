@@ -68,12 +68,7 @@ fn restart_watcher(state: &AppState) {
         }
     };
     let defaults = AppSettings::default();
-
-    let enabled_str = db::queries::get_setting(&conn, "enabled_agents").unwrap_or(None);
-    let enabled_agents: Vec<String> = match enabled_str {
-        Some(s) => serde_json::from_str(&s).unwrap_or(defaults.enabled_agents),
-        None => defaults.enabled_agents,
-    };
+    let enabled_agents = db::queries::get_enabled_agents(&conn);
     let watch_mode = db::queries::get_setting(&conn, "watch_mode")
         .unwrap_or(None)
         .unwrap_or(defaults.watch_mode);
@@ -109,19 +104,16 @@ fn restart_watcher(state: &AppState) {
 #[tauri::command]
 pub fn get_token_summary(range: String, state: State<AppState>) -> Result<TokenSummary, String> {
     let conn = db::open_readonly(&db_path_from(&state)).map_err(|e| e.to_string())?;
-    let summary = db::queries::get_token_summary(&conn, &range).map_err(|e| e.to_string())?;
+    let enabled_agents = db::queries::get_enabled_agents(&conn);
+    let summary = db::queries::get_token_summary_for_agents(&conn, &range, &enabled_agents)
+        .map_err(|e| e.to_string())?;
     Ok(summary)
 }
 
 #[tauri::command]
 pub fn get_agent_list(state: State<AppState>) -> Result<Vec<AgentInfo>, String> {
     let conn = db::open_readonly(&db_path_from(&state)).map_err(|e| e.to_string())?;
-    let defaults = AppSettings::default();
-    let enabled_str = db::queries::get_setting(&conn, "enabled_agents").unwrap_or(None);
-    let enabled: Vec<String> = match enabled_str {
-        Some(s) => serde_json::from_str(&s).unwrap_or(defaults.enabled_agents),
-        None => defaults.enabled_agents,
-    };
+    let enabled = db::queries::get_enabled_agents(&conn);
 
     let all = adapters::all_adapters();
     let agents =
@@ -155,27 +147,42 @@ pub fn get_agent_list(state: State<AppState>) -> Result<Vec<AgentInfo>, String> 
 pub fn toggle_agent(
     agent_name: String,
     enabled: bool,
+    app: AppHandle,
     state: State<AppState>,
 ) -> Result<(), String> {
     let conn = rusqlite::Connection::open(db_path_from(&state)).map_err(|e| e.to_string())?;
     let defaults = AppSettings::default();
-    let current_str = db::queries::get_setting(&conn, "enabled_agents").unwrap_or(None);
-    let mut current: Vec<String> = match current_str {
-        Some(s) => serde_json::from_str(&s).unwrap_or(defaults.enabled_agents),
-        None => defaults.enabled_agents,
-    };
+    let mut current = db::queries::get_enabled_agents(&conn);
+    let keep_days = db::queries::get_setting(&conn, "keep_days")
+        .unwrap_or(None)
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(defaults.keep_days);
+    let mut changed = false;
 
     if enabled {
         if !current.contains(&agent_name) {
-            current.push(agent_name);
+            current.push(agent_name.clone());
+            changed = true;
         }
     } else {
+        let before = current.len();
         current.retain(|a| a != &agent_name);
+        changed = current.len() != before;
     }
 
     let json = serde_json::to_string(&current).map_err(|e| e.to_string())?;
     db::queries::set_setting(&conn, "enabled_agents", &json).map_err(|e| e.to_string())?;
+    db::query_and_emit_today_summary(&app, &conn);
     drop(conn);
+
+    if enabled && changed {
+        let adapters: Vec<Box<dyn adapters::AgentAdapter>> = adapters::all_adapters()
+            .into_iter()
+            .filter(|a| a.agent_name() == agent_name)
+            .collect();
+        let write_tx = state.write_tx.lock().unwrap().clone();
+        watcher::catch_up_adapters(adapters, write_tx, keep_days, db_path_from(&state));
+    }
 
     // Agent 变更后重启 Watcher
     restart_watcher(&state);
@@ -255,6 +262,11 @@ pub fn update_settings(
         "watch_mode" | "polling_interval_secs" | "enabled_agents"
     ) {
         restart_watcher(&state);
+    }
+
+    if key == "enabled_agents" {
+        let conn = db::open_readonly(&db_path_from(&state)).map_err(|e| e.to_string())?;
+        db::query_and_emit_today_summary(&app, &conn);
     }
     Ok(())
 }

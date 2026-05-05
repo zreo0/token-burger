@@ -131,8 +131,9 @@ fn emit_token_summary(app_handle: &AppHandle, summary: &TokenSummary) {
     }
 }
 
-fn query_and_emit_today_summary(app_handle: &AppHandle, conn: &Connection) {
-    match queries::get_token_summary(conn, "today") {
+pub(crate) fn query_and_emit_today_summary(app_handle: &AppHandle, conn: &Connection) {
+    let enabled_agents = queries::get_enabled_agents(conn);
+    match queries::get_token_summary_for_agents(conn, "today", &enabled_agents) {
         Ok(summary) => {
             emit_token_summary(app_handle, &summary);
         }
@@ -238,7 +239,9 @@ impl DbManager {
                             continue;
                         }
                         // 入库后查询今日汇总并广播
-                        match queries::get_token_summary(&conn, "today") {
+                        let enabled_agents = queries::get_enabled_agents(&conn);
+                        match queries::get_token_summary_for_agents(&conn, "today", &enabled_agents)
+                        {
                             Ok(summary) => {
                                 log::info!(
                                     "[db] 今日汇总: total={}, input={}, output={}, cache_read={}, cache_create={}, agent_cost=${:.2}",
