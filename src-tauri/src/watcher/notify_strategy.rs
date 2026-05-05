@@ -14,7 +14,7 @@ use crate::db::WriteRequest;
 
 /// 基于 notify-debouncer-full 的实时监听策略
 ///
-/// 用 inotify/kqueue 真正监听文件变化，500ms debounce 后读取增量内容。
+/// 用 notify 推荐的系统 backend 监听文件变化，500ms debounce 后读取增量内容。
 /// 如果被监听目录/文件不存在则回退到 3s glob 轮询检测新路径，
 /// 一旦发现新路径就注册到 watcher。
 pub fn run_notify_polling(
@@ -45,6 +45,7 @@ pub fn run_notify_polling(
     // 辅助函数：展开 glob 模式，注册 watcher，记录初始 offset
     let register_paths = |patterns: &[String],
                           adapter_idx: usize,
+                          start_new_at_current_size: bool,
                           path_to_adapter: &mut HashMap<String, usize>,
                           file_offsets: &mut HashMap<String, u64>,
                           debouncer: &mut notify_debouncer_full::Debouncer<
@@ -58,9 +59,13 @@ pub fn run_notify_polling(
                     if path_to_adapter.contains_key(&path) {
                         continue;
                     }
-                    // 新文件默认从 0 开始，避免冷启动与注册之间的窗口期内容被跳过。
                     if !file_offsets.contains_key(&path) {
-                        file_offsets.insert(path.clone(), 0u64);
+                        let offset = if start_new_at_current_size {
+                            std::fs::metadata(&entry).map(|m| m.len()).unwrap_or(0)
+                        } else {
+                            0
+                        };
+                        file_offsets.insert(path.clone(), offset);
                     }
                     path_to_adapter.insert(path.clone(), adapter_idx);
 
@@ -77,13 +82,14 @@ pub fn run_notify_polling(
         register_paths(
             patterns,
             idx,
+            true,
             &mut path_to_adapter,
             &mut file_offsets,
             &mut debouncer,
         );
     }
 
-    // 主循环：优先处理 debounced 事件，定期扫描新路径
+    // 主循环：优先处理 debounced 事件，定期扫描新路径并补读漏掉的追加内容。
     let mut since_last_scan = std::time::Instant::now();
     while !stop_flag.load(Ordering::Relaxed) {
         // 使用较短超时以便及时响应 stop_flag
@@ -108,17 +114,26 @@ pub fn run_notify_polling(
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                // 每 3s 扫描一次 glob 注册新出现的文件
+                // notify 可能漏掉 append 或返回目录路径，定期 size 扫描用于兜底
                 if since_last_scan.elapsed() >= Duration::from_secs(3) {
                     for (idx, patterns) in log_patterns.iter().enumerate() {
                         register_paths(
                             patterns,
                             idx,
+                            false,
                             &mut path_to_adapter,
                             &mut file_offsets,
                             &mut debouncer,
                         );
                     }
+                    reconcile_registered_paths(
+                        &adapter_names,
+                        &adapters,
+                        &path_to_adapter,
+                        &mut file_offsets,
+                        &mut codex_model_cache,
+                        &write_tx,
+                    );
                     since_last_scan = std::time::Instant::now();
                 }
             }
@@ -143,100 +158,168 @@ fn process_events(
     for event in events {
         for path in &event.paths {
             let path_str = path.to_string_lossy().to_string();
-            let adapter_idx = match path_to_adapter.get(&path_str) {
-                Some(idx) => *idx,
-                None => continue,
-            };
-            let agent_name = &adapter_names[adapter_idx];
-            let adapter = match adapters.iter().find(|a| a.agent_name() == agent_name) {
-                Some(a) => a,
-                None => continue,
-            };
-
-            let meta = match std::fs::metadata(path) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-            let new_size = meta.len();
-            let prev_offset = file_offsets.get(&path_str).copied().unwrap_or(0);
-
-            if new_size < prev_offset {
-                // 文件被截断/轮转，从头重新读取
-                codex_model_cache.remove(&path_str);
-                log::info!(
-                    "[notify] {}: 文件轮转检测 offset {}→{}, 从头读取",
-                    agent_name,
-                    prev_offset,
-                    new_size
-                );
-                if let Ok(content) = read_from_offset(path, 0) {
-                    let logs = if agent_name == "codex" {
-                        let parsed =
-                            codex::parse_content_with_model(&content, codex::DEFAULT_CODEX_MODEL);
-                        codex_model_cache.insert(path_str.clone(), parsed.final_model);
-                        parsed.logs
-                    } else {
-                        adapter.parse_content(&content)
-                    };
-                    if !logs.is_empty() {
-                        log::info!(
-                            "[notify] {}: 解析 {} 条记录 (轮转重读)",
-                            agent_name,
-                            logs.len()
-                        );
-                        let _ = write_tx.send(WriteRequest::InsertTokenLogs(logs));
-                    }
-                }
-                file_offsets.insert(path_str.clone(), new_size);
-                let _ = write_tx.send(WriteRequest::UpdateOffset {
-                    file_path: path_str,
-                    offset: new_size,
-                });
-                continue;
-            }
-
-            if new_size == prev_offset {
-                // 无变化
-                continue;
-            }
-
-            // 解析新增内容
-            if let Ok(logs) = parse_changed_content(
+            process_path_change(
                 path,
                 &path_str,
-                prev_offset,
-                agent_name,
-                adapter.as_ref(),
+                "notify",
+                adapter_names,
+                adapters,
+                path_to_adapter,
+                file_offsets,
                 codex_model_cache,
-            ) {
-                if !logs.is_empty() {
-                    // 汇总关键信息：agent、记录数、token 总量
-                    let total_tokens: i64 = logs.iter().map(|l| l.token_count).sum();
-                    let models: Vec<&str> = logs
-                        .iter()
-                        .map(|l| l.model_id.as_str())
-                        .collect::<std::collections::HashSet<_>>()
-                        .into_iter()
-                        .collect();
-                    log::info!(
-                        "[notify] {}: 增量读取 offset {}→{}, {} 条记录, {} tokens, models={:?}",
-                        agent_name,
-                        prev_offset,
-                        new_size,
-                        logs.len(),
-                        total_tokens,
-                        models
-                    );
-                    let _ = write_tx.send(WriteRequest::InsertTokenLogs(logs));
-                }
-            }
-            file_offsets.insert(path_str.clone(), new_size);
-            let _ = write_tx.send(WriteRequest::UpdateOffset {
-                file_path: path_str,
-                offset: new_size,
-            });
+                write_tx,
+            );
         }
     }
+}
+
+fn reconcile_registered_paths(
+    adapter_names: &[String],
+    adapters: &[Box<dyn crate::adapters::AgentAdapter>],
+    path_to_adapter: &HashMap<String, usize>,
+    file_offsets: &mut HashMap<String, u64>,
+    codex_model_cache: &mut HashMap<String, String>,
+    write_tx: &Sender<WriteRequest>,
+) {
+    let paths: Vec<String> = path_to_adapter.keys().cloned().collect();
+    for path_str in paths {
+        process_path_change(
+            std::path::Path::new(&path_str),
+            &path_str,
+            "reconcile",
+            adapter_names,
+            adapters,
+            path_to_adapter,
+            file_offsets,
+            codex_model_cache,
+            write_tx,
+        );
+    }
+}
+
+fn process_path_change(
+    path: &std::path::Path,
+    path_str: &str,
+    source: &str,
+    adapter_names: &[String],
+    adapters: &[Box<dyn crate::adapters::AgentAdapter>],
+    path_to_adapter: &HashMap<String, usize>,
+    file_offsets: &mut HashMap<String, u64>,
+    codex_model_cache: &mut HashMap<String, String>,
+    write_tx: &Sender<WriteRequest>,
+) {
+    let adapter_idx = match path_to_adapter.get(path_str) {
+        Some(idx) => *idx,
+        None => return,
+    };
+    let agent_name = &adapter_names[adapter_idx];
+    let adapter = match adapters.iter().find(|a| a.agent_name() == agent_name) {
+        Some(a) => a,
+        None => return,
+    };
+
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+    let new_size = meta.len();
+    let prev_offset = file_offsets.get(path_str).copied().unwrap_or(0);
+
+    if new_size < prev_offset {
+        codex_model_cache.remove(path_str);
+        log::info!(
+            "[{}] {}: 文件轮转检测 offset {}→{}, 从头读取",
+            source,
+            agent_name,
+            prev_offset,
+            new_size
+        );
+        let content = match read_from_offset(path, 0) {
+            Ok(content) => content,
+            Err(err) => {
+                log::warn!(
+                    "[{}] {}: 轮转重读失败，保留 offset {}: {}",
+                    source,
+                    agent_name,
+                    prev_offset,
+                    err
+                );
+                return;
+            }
+        };
+        let logs = if agent_name == "codex" {
+            let parsed = codex::parse_content_with_model(&content, codex::DEFAULT_CODEX_MODEL);
+            codex_model_cache.insert(path_str.to_string(), parsed.final_model);
+            parsed.logs
+        } else {
+            adapter.parse_content(&content)
+        };
+        if !logs.is_empty() {
+            log::info!(
+                "[{}] {}: 解析 {} 条记录 (轮转重读)",
+                source,
+                agent_name,
+                logs.len()
+            );
+            let _ = write_tx.send(WriteRequest::InsertTokenLogs(logs));
+        }
+        file_offsets.insert(path_str.to_string(), new_size);
+        let _ = write_tx.send(WriteRequest::UpdateOffset {
+            file_path: path_str.to_string(),
+            offset: new_size,
+        });
+        return;
+    }
+
+    if new_size == prev_offset {
+        return;
+    }
+
+    let logs = match parse_changed_content(
+        path,
+        path_str,
+        prev_offset,
+        agent_name,
+        adapter.as_ref(),
+        codex_model_cache,
+    ) {
+        Ok(logs) => logs,
+        Err(err) => {
+            log::warn!(
+                "[{}] {}: 增量读取失败，保留 offset {}: {}",
+                source,
+                agent_name,
+                prev_offset,
+                err
+            );
+            return;
+        }
+    };
+    if !logs.is_empty() {
+        let total_tokens: i64 = logs.iter().map(|l| l.token_count).sum();
+        let models: Vec<&str> = logs
+            .iter()
+            .map(|l| l.model_id.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        log::info!(
+            "[{}] {}: 增量读取 offset {}→{}, {} 条记录, {} tokens, models={:?}",
+            source,
+            agent_name,
+            prev_offset,
+            new_size,
+            logs.len(),
+            total_tokens,
+            models
+        );
+        let _ = write_tx.send(WriteRequest::InsertTokenLogs(logs));
+    }
+    file_offsets.insert(path_str.to_string(), new_size);
+    let _ = write_tx.send(WriteRequest::UpdateOffset {
+        file_path: path_str.to_string(),
+        offset: new_size,
+    });
 }
 
 fn parse_changed_content(
@@ -361,5 +444,56 @@ mod tests {
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].model_id, "gpt-5.5");
         assert_eq!(cache.get(&path_str).map(String::as_str), Some("gpt-5.5"));
+    }
+
+    #[test]
+    fn reconcile_registered_paths_reads_growth_without_notify_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let initial = r#"{"type":"turn_context","payload":{"model":"gpt-5.4"}}
+"#;
+        std::fs::write(&path, initial).unwrap();
+        let path_str = path.to_string_lossy().to_string();
+
+        let incremental = r#"{"timestamp":"2026-01-14T07:24:24.629Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":2}}}}
+"#;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(incremental.as_bytes()).unwrap();
+        file.flush().unwrap();
+
+        let adapter_names = vec!["codex".to_string()];
+        let adapters: Vec<Box<dyn crate::adapters::AgentAdapter>> = vec![Box::new(CodexAdapter)];
+        let path_to_adapter = HashMap::from([(path_str.clone(), 0usize)]);
+        let mut file_offsets = HashMap::from([(path_str.clone(), initial.len() as u64)]);
+        let mut codex_model_cache = HashMap::new();
+        let (write_tx, write_rx) = std::sync::mpsc::channel();
+
+        reconcile_registered_paths(
+            &adapter_names,
+            &adapters,
+            &path_to_adapter,
+            &mut file_offsets,
+            &mut codex_model_cache,
+            &write_tx,
+        );
+
+        match write_rx.recv().unwrap() {
+            WriteRequest::InsertTokenLogs(logs) => {
+                assert_eq!(logs.len(), 1);
+                assert_eq!(logs[0].model_id, "gpt-5.4");
+                assert_eq!(logs[0].token_count, 2);
+            }
+            _ => panic!("expected token logs"),
+        }
+        match write_rx.recv().unwrap() {
+            WriteRequest::UpdateOffset { file_path, offset } => {
+                assert_eq!(file_path, path_str);
+                assert_eq!(offset, (initial.len() + incremental.len()) as u64);
+            }
+            _ => panic!("expected offset update"),
+        }
     }
 }
