@@ -1,32 +1,56 @@
 import type { ModelPrice, PricingTable, TokenBreakdown } from '../types';
 
+// 仅用于计费匹配：保留数据库中的原始 model_id，价格查询时再映射到官方/价格表模型名。
+export const MODEL_PRICE_ALIASES: Record<string, string> = {
+    'gpt-5.5-fast': 'gpt-5.5',
+};
+
+export function normalizeModelIdForPricing(modelId: string): string {
+    return MODEL_PRICE_ALIASES[modelId] ?? modelId;
+}
+
+function stripProviderPrefix(modelId: string): string {
+    return modelId.replace(/^[^/]+\//, '');
+}
+
+function stripModelSuffix(modelId: string): string {
+    return modelId
+        .replace(/-\d{8}$/, '')
+        .replace(/-v\d+$/, '');
+}
+
+function getPricingCandidates(modelId: string): string[] {
+    const withoutPrefix = stripProviderPrefix(modelId);
+    const withoutSuffix = stripModelSuffix(modelId);
+    const withoutPrefixAndSuffix = stripModelSuffix(withoutPrefix);
+    // 匹配顺序保持保守：原始值优先，其次别名，再尝试去 provider 前缀和版本/日期后缀。
+    const candidates = [
+        modelId,
+        normalizeModelIdForPricing(modelId),
+        withoutPrefix,
+        normalizeModelIdForPricing(withoutPrefix),
+        withoutSuffix,
+        normalizeModelIdForPricing(withoutSuffix),
+        withoutPrefixAndSuffix,
+        normalizeModelIdForPricing(withoutPrefixAndSuffix),
+    ];
+
+    return [...new Set(candidates)];
+}
+
 /**
- * 模型名匹配：精确 → 归一化 → Provider 前缀 → $0
+ * 模型名匹配：精确 → 别名 → Provider 前缀 → 后缀归一化 → $0
  */
 export function matchModelPrice(
     modelId: string,
     pricing: PricingTable
 ): ModelPrice | null {
-    // 1. 精确匹配
-    if (pricing[modelId]) {
-        return pricing[modelId];
+    for (const candidate of getPricingCandidates(modelId)) {
+        if (pricing[candidate]) {
+            return pricing[candidate];
+        }
     }
 
-    // 2. 归一化匹配（去日期后缀 -YYYYMMDD、版本号 -v\d）
-    const normalized = modelId
-        .replace(/-\d{8}$/, '')
-        .replace(/-v\d+$/, '');
-    if (pricing[normalized]) {
-        return pricing[normalized];
-    }
-
-    // 3. Provider 前缀匹配（去 anthropic/ 等前缀）
-    const withoutPrefix = modelId.replace(/^[^/]+\//, '');
-    if (pricing[withoutPrefix]) {
-        return pricing[withoutPrefix];
-    }
-
-    // 4. 未匹配
     return null;
 }
 

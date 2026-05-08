@@ -95,8 +95,39 @@ fn save_today_cache(table: &PricingTable) {
         let _ = std::fs::create_dir_all(&dir);
         if let Some(path) = today_cache_file() {
             if let Ok(json) = serde_json::to_string_pretty(table) {
-                let _ = std::fs::write(path, json);
+                if std::fs::write(&path, json).is_ok() {
+                    cleanup_old_pricing_caches(&path);
+                }
             }
+        }
+    }
+}
+
+/// 删除同目录下旧的定价缓存文件，仅匹配 model_pricing_*.json
+fn cleanup_old_pricing_caches(current_path: &Path) {
+    let Some(dir) = current_path.parent() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        // 只清理同目录旧缓存普通文件，避免误删当前缓存、目录或其它用户文件。
+        if path == current_path || !path.is_file() {
+            continue;
+        }
+
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if !file_name.starts_with("model_pricing_") || !file_name.ends_with(".json") {
+            continue;
+        }
+
+        match std::fs::remove_file(&path) {
+            Ok(()) => log::info!("已删除旧定价缓存: {}", path.display()),
+            Err(e) => log::warn!("删除旧定价缓存失败 {}: {}", path.display(), e),
         }
     }
 }
@@ -213,5 +244,23 @@ mod tests {
     fn test_fallback_pricing() {
         let table = fallback_pricing();
         assert!(table.contains_key("claude-sonnet-4-20250514"));
+    }
+
+    #[test]
+    fn test_cleanup_old_pricing_caches() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("model_pricing_2026-05-09.json");
+        let old = dir.path().join("model_pricing_2026-05-08.json");
+        let unrelated = dir.path().join("notes.json");
+
+        std::fs::write(&current, "{}").unwrap();
+        std::fs::write(&old, "{}").unwrap();
+        std::fs::write(&unrelated, "{}").unwrap();
+
+        cleanup_old_pricing_caches(&current);
+
+        assert!(current.exists());
+        assert!(!old.exists());
+        assert!(unrelated.exists());
     }
 }

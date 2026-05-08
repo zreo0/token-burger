@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { matchModelPrice, calculateModelCost, calculateTotalCost } from '../pricing';
+import { matchModelPrice, calculateModelCost, calculateTotalCost, normalizeModelIdForPricing } from '../pricing';
 import type { PricingTable, ModelPrice, TokenBreakdown } from '../../types';
 
 const testPrice: ModelPrice = {
@@ -11,7 +11,18 @@ const testPrice: ModelPrice = {
 
 const pricing: PricingTable = {
     'claude-sonnet-4': testPrice,
+    'gpt-5.5': testPrice,
 };
+
+describe('normalizeModelIdForPricing', () => {
+    it('应将模型别名映射到价格表模型名', () => {
+        expect(normalizeModelIdForPricing('gpt-5.5-fast')).toBe('gpt-5.5');
+    });
+
+    it('未配置别名时返回原始模型名', () => {
+        expect(normalizeModelIdForPricing('unknown-model')).toBe('unknown-model');
+    });
+});
 
 describe('matchModelPrice', () => {
     it('精确匹配', () => {
@@ -24,6 +35,14 @@ describe('matchModelPrice', () => {
 
     it('Provider 前缀匹配', () => {
         expect(matchModelPrice('anthropic/claude-sonnet-4', pricing)).toBe(testPrice);
+    });
+
+    it('别名匹配', () => {
+        expect(matchModelPrice('gpt-5.5-fast', pricing)).toBe(testPrice);
+    });
+
+    it('Provider 前缀后的别名匹配', () => {
+        expect(matchModelPrice('openai/gpt-5.5-fast', pricing)).toBe(testPrice);
     });
 
     it('未匹配返回 null', () => {
