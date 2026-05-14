@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getTopModels } from '../index';
+import { getPopupWindowHeight, getTopModels } from '../index';
 
 describe('getTopModels', () => {
     it('按总 token 数排序并只返回前两个模型', () => {
@@ -35,5 +35,18 @@ describe('getTopModels', () => {
     it('在无模型数据时返回空数组', () => {
         expect(getTopModels(undefined)).toEqual([]);
         expect(getTopModels(null)).toEqual([]);
+    });
+});
+
+describe('getPopupWindowHeight', () => {
+    it('无账号快照时保持默认高度', () => {
+        expect(getPopupWindowHeight(false, 640)).toBe(540);
+        expect(getPopupWindowHeight(false, 0)).toBe(540);
+    });
+
+    it('有账号快照时按内容动态增高并限制最大值', () => {
+        expect(getPopupWindowHeight(true, 520)).toBe(540);
+        expect(getPopupWindowHeight(true, 620.2)).toBe(623);
+        expect(getPopupWindowHeight(true, 900)).toBe(680);
     });
 });

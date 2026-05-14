@@ -52,10 +52,22 @@
         "later": "Later",
         "downloading": "Downloading... {{progress}}%",
         "readyToRestart": "Update ready. Restart to apply.",
-        "restart": "Restart Now"
+        "restart": "Restart Now",
+        "usage": "Usage"
     },
     "common": {
         "error": "Something went wrong",
-        "retry": "Retry"
+        "retry": "Retry",
+        "refresh": "Refresh",
+        "loading": "Loading"
+    },
+    "usage": {
+        "title": "Account Usage",
+        "stale": "Stale",
+        "noData": "No account usage data yet",
+        "notDetected": "Auth file or credential not detected",
+        "experimentalWarning": "Account usage tracking is an experimental feature.",
+        "saveCredential": "Save Credential",
+        "clearCredential": "Clear"
     }
 }

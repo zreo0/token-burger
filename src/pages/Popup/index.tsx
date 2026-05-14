@@ -3,7 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useToken } from '../../context/TokenContext';
+import { useAccountUsageContext } from '../../context/AccountUsageContext';
 import Burger from '../../components/Burger';
+import AccountUsageCard from '../../components/AccountUsageCard';
 import ErrorBoundary from '../../components/ErrorBoundary';
 import { formatTokenCount, formatCost } from '../../utils/format';
 import { calculateTotalCost } from '../../utils/pricing';
@@ -17,6 +19,10 @@ const TIME_RANGES: { key: TimeRange; labelKey: string }[] = [
     { key: '7d', labelKey: 'popup.week' },
     { key: '30d', labelKey: 'popup.month' },
 ];
+
+const POPUP_BASE_HEIGHT = 540;
+const POPUP_ACCOUNT_USAGE_MAX_HEIGHT = 680;
+const POPUP_HEIGHT_BUFFER = 2;
 
 export function getBreakdownTotal(breakdown: TokenBreakdown): number {
     return breakdown.input + breakdown.cache_create + breakdown.cache_read + breakdown.output;
@@ -32,9 +38,21 @@ export function getTopModels(byModel: Record<string, TokenBreakdown> | null | un
         .slice(0, 2);
 }
 
+export function getPopupWindowHeight(hasAccountSnapshot: boolean, contentHeight: number): number {
+    if (!hasAccountSnapshot || !Number.isFinite(contentHeight) || contentHeight <= 0) {
+        return POPUP_BASE_HEIGHT;
+    }
+
+    return Math.max(
+        POPUP_BASE_HEIGHT,
+        Math.min(Math.ceil(contentHeight) + POPUP_HEIGHT_BUFFER, POPUP_ACCOUNT_USAGE_MAX_HEIGHT),
+    );
+}
+
 export function Popup() {
     const { t } = useTranslation();
     const { summary, loading, error, refresh, range, setRange } = useToken();
+    const { snapshots, providers } = useAccountUsageContext();
     const [coldStart, setColdStart] = useState<ColdStartProgress | null>(null);
     const [pricing, setPricing] = useState<PricingTable>({});
     const [pricingReady, setPricingReady] = useState(false);
@@ -91,6 +109,19 @@ export function Popup() {
     const isSummaryLoading = loading || !summary;
     const isCostLoading = loading || !pricingReady;
     const topModels = getTopModels(summary?.by_model);
+    const enabledProviderIds = new Set(providers.filter(provider => provider.enabled).map(provider => provider.id));
+    const hasAccountSnapshot = snapshots.some(snapshot => enabledProviderIds.has(snapshot.provider_id));
+
+    useLayoutEffect(() => {
+        const frame = window.requestAnimationFrame(() => {
+            const container = document.querySelector<HTMLElement>('.popup-container');
+            const height = getPopupWindowHeight(hasAccountSnapshot, container?.scrollHeight ?? POPUP_BASE_HEIGHT);
+
+            invoke('resize_popup_window', { height }).catch(() => {});
+        });
+
+        return () => window.cancelAnimationFrame(frame);
+    }, [hasAccountSnapshot, snapshots.length, providers.length, topModels.length, coldStart, isSummaryLoading, isCostLoading]);
 
     if (error) {
         return (
@@ -144,6 +175,9 @@ export function Popup() {
                     ))}
                 </div>
             )}
+
+            {/* Account Usage */}
+            <AccountUsageCard />
 
             {coldStart && (
                 <div className="cold-start-light">

@@ -75,6 +75,7 @@ pub fn init_db(db_path: &PathBuf) -> Result<Connection, rusqlite::Error> {
     let conn = Connection::open(db_path)?;
     conn.busy_timeout(std::time::Duration::from_millis(5000))?;
     conn.execute_batch(SCHEMA_SQL)?;
+    crate::account_usage::store::init_schema(&conn)?;
     ensure_token_logs_cost_column(&conn)?;
     Ok(conn)
 }

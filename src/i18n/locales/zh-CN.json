@@ -52,10 +52,22 @@
         "later": "稍后",
         "downloading": "下载中... {{progress}}%",
         "readyToRestart": "更新就绪，重启以应用更新。",
-        "restart": "立即重启"
+        "restart": "立即重启",
+        "usage": "账号用量"
     },
     "common": {
         "error": "出了点问题",
-        "retry": "重试"
+        "retry": "重试",
+        "refresh": "刷新",
+        "loading": "加载中"
+    },
+    "usage": {
+        "title": "账号用量",
+        "stale": "已过期",
+        "noData": "暂无账号用量数据",
+        "notDetected": "未检测到认证文件或凭据",
+        "experimentalWarning": "账号用量追踪是一项实验性功能。",
+        "saveCredential": "保存凭据",
+        "clearCredential": "清除"
     }
 }

@@ -6,6 +6,11 @@ use tauri::{
     AppHandle, Emitter, State,
 };
 
+use crate::account_usage::manager::AccountUsageManager;
+use crate::account_usage::{
+    redact_account_usage_snapshots, AccountUsageProviderInfo, AccountUsageProviderState,
+    AccountUsageSnapshot,
+};
 use crate::adapters;
 use crate::db;
 use crate::types::{AgentInfo, AppSettings, PlatformInfo, PricingTable, TokenSummary};
@@ -17,6 +22,23 @@ pub struct AppState {
     pub pricing: PricingTable,
     pub watcher: Mutex<Option<watcher::WatcherEngine>>,
     pub write_tx: Mutex<std::sync::mpsc::Sender<db::WriteRequest>>,
+    pub account_usage: AccountUsageManager,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct SaveAccountUsageCredentialRequest {
+    pub provider_id: String,
+    pub account_key: Option<String>,
+    pub secret_kind: String,
+    pub secret: String,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct SetAccountUsageProviderEnabledRequest {
+    pub provider_id: String,
+    pub enabled: bool,
+    pub refresh_interval_secs: Option<u64>,
 }
 
 pub fn tray_menu_labels(language: &str) -> (&'static str, &'static str) {
@@ -295,6 +317,115 @@ fn current_platform_info() -> PlatformInfo {
 #[tauri::command]
 pub fn get_platform_info() -> Result<PlatformInfo, String> {
     Ok(current_platform_info())
+}
+
+#[tauri::command]
+pub fn list_account_usage_providers(
+    state: State<AppState>,
+) -> Result<Vec<AccountUsageProviderInfo>, String> {
+    state.account_usage.provider_infos()
+}
+
+#[tauri::command]
+pub fn get_account_usage_snapshots(
+    state: State<AppState>,
+) -> Result<Vec<AccountUsageSnapshot>, String> {
+    state
+        .account_usage
+        .latest_snapshots()
+        .map(redact_account_usage_snapshots)
+}
+
+#[tauri::command]
+pub fn refresh_account_usage_all(
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<Vec<AccountUsageSnapshot>, String> {
+    let snapshots = redact_account_usage_snapshots(state.account_usage.refresh_all_enabled()?);
+    let _ = app.emit("account-usage-updated", &snapshots);
+    Ok(snapshots)
+}
+
+#[tauri::command]
+pub fn refresh_account_usage_provider(
+    provider_id: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<Vec<AccountUsageSnapshot>, String> {
+    let snapshots =
+        redact_account_usage_snapshots(state.account_usage.refresh_provider(&provider_id)?);
+    let _ = app.emit("account-usage-updated", &snapshots);
+    Ok(snapshots)
+}
+
+#[tauri::command]
+pub fn save_account_usage_credential(
+    request: SaveAccountUsageCredentialRequest,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<AccountUsageProviderState, String> {
+    let provider_id = request.provider_id.clone();
+    let provider_state = state.account_usage.save_credential(
+        request.provider_id,
+        request.account_key,
+        request.secret_kind,
+        request.secret,
+        request.label,
+    )?;
+    let snapshots = state
+        .account_usage
+        .refresh_provider(&provider_id)
+        .map(redact_account_usage_snapshots)
+        .unwrap_or_default();
+    if let Ok(providers) = state.account_usage.provider_infos() {
+        let _ = app.emit("account-usage-providers-updated", &providers);
+    }
+    let _ = app.emit("account-usage-updated", &snapshots);
+    Ok(provider_state)
+}
+
+#[tauri::command]
+pub fn clear_account_usage_credential(
+    provider_id: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<AccountUsageProviderState, String> {
+    let provider_state = state.account_usage.clear_credential(provider_id)?;
+    let snapshots = state
+        .account_usage
+        .latest_snapshots()
+        .map(redact_account_usage_snapshots)
+        .unwrap_or_default();
+    if let Ok(providers) = state.account_usage.provider_infos() {
+        let _ = app.emit("account-usage-providers-updated", &providers);
+    }
+    let _ = app.emit("account-usage-updated", &snapshots);
+    Ok(provider_state)
+}
+
+#[tauri::command]
+pub fn get_account_usage_provider_state(
+    provider_id: String,
+    state: State<AppState>,
+) -> Result<AccountUsageProviderState, String> {
+    state.account_usage.provider_state(provider_id)
+}
+
+#[tauri::command]
+pub fn set_account_usage_provider_enabled(
+    request: SetAccountUsageProviderEnabledRequest,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<AccountUsageProviderState, String> {
+    let provider_state = state.account_usage.set_provider_enabled(
+        request.provider_id,
+        request.enabled,
+        request.refresh_interval_secs,
+    )?;
+    if let Ok(providers) = state.account_usage.provider_infos() {
+        let _ = app.emit("account-usage-providers-updated", &providers);
+    }
+    Ok(provider_state)
 }
 
 /// 格式化 token 数量为可读字符串（用于 tray title）

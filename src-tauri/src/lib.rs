@@ -1,3 +1,4 @@
+mod account_usage;
 mod adapters;
 mod commands;
 mod db;
@@ -8,13 +9,14 @@ mod watcher;
 
 use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, LogicalPosition, Manager, Rect, Runtime, WebviewUrl, WebviewWindow,
+    AppHandle, LogicalPosition, LogicalSize, Manager, Rect, Runtime, WebviewUrl, WebviewWindow,
 };
 use tauri_plugin_positioner::{Position as TrayPosition, WindowExt};
 
 const POPUP_WINDOW_LABEL: &str = "popup";
 const POPUP_WINDOW_WIDTH: f64 = 390.0;
 const POPUP_WINDOW_HEIGHT: f64 = 540.0;
+const POPUP_WINDOW_MAX_HEIGHT: f64 = 680.0;
 
 fn attach_popup_auto_hide<R: Runtime>(_popup: &WebviewWindow<R>) {
     #[cfg(not(debug_assertions))]
@@ -111,6 +113,22 @@ fn restart_app(app: AppHandle) {
     app.request_restart();
 }
 
+#[tauri::command]
+fn resize_popup_window(app: AppHandle, height: f64) -> Result<(), String> {
+    let popup = app
+        .get_webview_window(POPUP_WINDOW_LABEL)
+        .ok_or_else(|| "popup window not found".to_string())?;
+    let target_height = if height.is_finite() {
+        height.clamp(POPUP_WINDOW_HEIGHT, POPUP_WINDOW_MAX_HEIGHT)
+    } else {
+        POPUP_WINDOW_HEIGHT
+    };
+
+    popup
+        .set_size(LogicalSize::new(POPUP_WINDOW_WIDTH, target_height))
+        .map_err(|error| error.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
@@ -124,6 +142,11 @@ pub fn run() {
             // 初始化数据库
             let db_path = db::get_db_path(app.handle());
             db::init_db(&db_path).expect("数据库初始化失败");
+            let account_usage_manager =
+                account_usage::manager::AccountUsageManager::new(db_path.clone());
+            account_usage_manager
+                .initialize_provider_states()
+                .expect("账号用量 Provider 状态初始化失败");
 
             // 加载定价表
             let resource_dir = app
@@ -213,6 +236,7 @@ pub fn run() {
                 pricing: pricing_table,
                 watcher: std::sync::Mutex::new(Some(watcher_engine)),
                 write_tx: std::sync::Mutex::new(write_tx_for_state),
+                account_usage: account_usage_manager,
             });
 
             // 使用编译时嵌入的图标，Windows 使用白色版本以适配深色任务栏
@@ -308,6 +332,15 @@ pub fn run() {
             commands::update_settings,
             commands::get_pricing,
             commands::get_platform_info,
+            commands::list_account_usage_providers,
+            commands::get_account_usage_snapshots,
+            commands::refresh_account_usage_all,
+            commands::refresh_account_usage_provider,
+            commands::save_account_usage_credential,
+            commands::clear_account_usage_credential,
+            commands::get_account_usage_provider_state,
+            commands::set_account_usage_provider_enabled,
+            resize_popup_window,
             restart_app,
         ])
         .run(tauri::generate_context!())

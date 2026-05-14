@@ -82,3 +82,92 @@ export interface ColdStartProgress {
 
 // 时间范围
 export type TimeRange = 'today' | '7d' | '30d';
+
+export type AccountUsageCapability =
+    | 'local_tokens' | 'account_usage' | 'account_quota'
+    | 'cost_estimate' | 'multi_account' | 'official_api'
+    | 'internal_api' | 'cookie_required' | 'auth_file_required'
+    | 'token_required';
+
+export type AccountUsageSource =
+    | 'local_logs' | 'auth_file' | 'official_api'
+    | 'internal_api' | 'user_credential' | 'unsupported';
+
+export type AccountUsageConfidence = 'high' | 'medium' | 'low';
+
+export type AccountUsageStatus =
+    | 'ok' | 'stale' | 'auth_required' | 'forbidden'
+    | 'unsupported' | 'rate_limited' | 'network'
+    | 'schema_changed' | 'credential_unavailable' | 'error';
+
+export type AccountUsageMetricScope =
+    | 'personal' | 'account' | 'workspace'
+    | 'organization' | 'team' | 'enterprise' | 'local';
+
+export interface CredentialRequirement {
+    key: string;
+    label: string;
+    secret: boolean;
+    required: boolean;
+    description: string;
+}
+
+export interface AccountUsageProviderInfo {
+    id: string;
+    display_name: string;
+    enabled: boolean;
+    available: boolean;
+    source: AccountUsageSource;
+    confidence: AccountUsageConfidence;
+    capabilities: AccountUsageCapability[];
+    credential_requirements: CredentialRequirement[];
+    experimental: boolean;
+    default_refresh_interval_secs: number;
+    refresh_interval_secs: number;
+}
+
+export interface AccountUsageError {
+    code: AccountUsageStatus;
+    message: string;
+    retry_after_secs?: number;
+}
+
+export interface AccountUsageMetric {
+    metric_key: string;
+    label: string;
+    unit: string;
+    scope: AccountUsageMetricScope;
+    used?: number | null;
+    limit?: number | null;
+    remaining?: number | null;
+    percentage?: number | null;
+    reset_at?: string | null;
+}
+
+export interface AccountUsageSnapshot {
+    provider_id: string;
+    account_key: string;
+    account_label?: string | null;
+    plan?: string | null;
+    status: AccountUsageStatus;
+    source: AccountUsageSource;
+    confidence: AccountUsageConfidence;
+    observed_at: string;
+    period_start?: string | null;
+    period_end?: string | null;
+    reset_at?: string | null;
+    stale: boolean;
+    error?: AccountUsageError;
+    metrics: AccountUsageMetric[];
+}
+
+export interface AccountUsageProviderState {
+    provider_id: string;
+    enabled: boolean;
+    refresh_interval_secs: number;
+    last_refresh_at?: string;
+    retry_after_until?: string;
+    credential_ref?: string;
+    credential_label?: string;
+    auto_discovery_enabled: boolean;
+}

@@ -1,11 +1,13 @@
 .popup-container {
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 12px;
     width: 100%;
     height: 100vh;
     box-sizing: border-box;
     padding: 16px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     color: rgba(34, 34, 34, 0.92);
     background: #ffffff;
     border: 0.5px solid rgba(0, 0, 0, 0.1);
@@ -15,6 +17,11 @@
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.7);
     font-family: -apple-system, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif;
     user-select: none;
+}
+
+.popup-container::-webkit-scrollbar {
+    width: 0;
+    height: 0;
 }
 
 .popup-container.windows {
@@ -250,7 +257,6 @@
     cursor: pointer;
 }
 
-@media (prefers-color-scheme: dark) {
 .skeleton-pulse {
     display: inline-block;
     height: 1em;
@@ -274,9 +280,8 @@
     .skeleton-pulse {
         background: rgba(255, 255, 255, 0.1);
     }
-}
 
-.popup-error {
+    .popup-error {
         color: rgba(255, 255, 255, 0.64);
     }
 

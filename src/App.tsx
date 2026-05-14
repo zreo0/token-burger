@@ -3,6 +3,7 @@ import { HashRouter, Routes, Route } from 'react-router-dom';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { TokenProvider } from './context/TokenContext';
+import { AccountUsageProvider } from './context/AccountUsageContext';
 import Popup from './pages/Popup';
 import Settings from './pages/Settings';
 import i18n from './i18n';
@@ -40,12 +41,14 @@ function App() {
 
     return (
         <TokenProvider>
-            <HashRouter>
-                <Routes>
-                    <Route path="/" element={<Popup />} />
-                    <Route path="/settings" element={<Settings />} />
-                </Routes>
-            </HashRouter>
+            <AccountUsageProvider>
+                <HashRouter>
+                    <Routes>
+                        <Route path="/" element={<Popup />} />
+                        <Route path="/settings" element={<Settings />} />
+                    </Routes>
+                </HashRouter>
+            </AccountUsageProvider>
         </TokenProvider>
     );
 }

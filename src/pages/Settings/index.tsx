@@ -8,9 +8,13 @@ import { AnimatePresence, motion } from 'framer-motion';
 import type { AgentInfo, AppSettings, PlatformInfo } from '../../types';
 import { getPlatformInfo } from '../../utils/platform';
 import { BURGER_THEMES } from '../../components/Burger/themes';
+import { useAccountUsageContext } from '../../context/AccountUsageContext';
 import './index.css';
 
-type Tab = 'general' | 'agents' | 'data' | 'about';
+type Tab = 'general' | 'agents' | 'data' | 'usage' | 'about';
+
+// 账号用量 Provider 逐个开放；其他平台待验证完成后再逐个上线。
+const ENABLED_USAGE_PROVIDER_IDS = new Set(['codex']);
 
 type UpdateStatus =
     | { state: 'idle' }
@@ -23,6 +27,7 @@ type UpdateStatus =
 
 function Settings() {
     const { t, i18n } = useTranslation();
+    const { providers: usageProviders, setEnabled: setUsageEnabled, saveCredential, clearCredential } = useAccountUsageContext();
     const [tab, setTab] = useState<Tab>('general');
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -30,6 +35,7 @@ function Settings() {
     const [confirmAction, setConfirmAction] = useState<string | null>(null);
     const [appVersion, setAppVersion] = useState('');
     const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ state: 'idle' });
+    const visibleUsageProviders = usageProviders.filter(provider => ENABLED_USAGE_PROVIDER_IDS.has(provider.id));
 
     useEffect(() => {
         getVersion().then(setAppVersion).catch(() => {});
@@ -134,7 +140,7 @@ function Settings() {
             <div className="settings-container">
                 <div className="settings-header">
                     <div className="settings-tabs">
-                        {(['general', 'agents', 'data', 'about'] as Tab[]).map((t_) => (
+                        {(['general', 'agents', 'data', 'usage', 'about'] as Tab[]).map((t_) => (
                             <button
                                 key={t_}
                                 type="button"
@@ -311,6 +317,62 @@ function Settings() {
                                         )}
                                     </div>
                                 </>
+                            )}
+                            {tab === 'usage' && (
+                                <div className="settings-group">
+                                    <div style={{ padding: '8px 12px', background: 'var(--bg-warning, #fff3cd)', color: 'var(--text-warning, #856404)', borderRadius: '6px', fontSize: '12px', marginBottom: '16px' }}>
+                                        {t('usage.experimentalWarning', 'Account usage tracking is an experimental feature.')}
+                                    </div>
+                                    {visibleUsageProviders.map((provider, index) => (
+                                        <div key={provider.id}>
+                                            <div className="setting-row agent-row">
+                                                <div className="agent-info">
+                                                    <div className="agent-name-row">
+                                                        <span className="agent-name">{provider.display_name}</span>
+                                                        {provider.experimental && <span className="agent-source-badge">Experimental</span>}
+                                                    </div>
+                                                </div>
+                                                <label className="mac-toggle">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={provider.enabled}
+                                                        onChange={(e) => setUsageEnabled(provider.id, e.target.checked)}
+                                                    />
+                                                    <span className="mac-toggle-slider" />
+                                                </label>
+                                            </div>
+                                            {provider.enabled && provider.credential_requirements?.length > 0 && (
+                                                <div style={{ padding: '12px', background: 'var(--bg-secondary)', borderRadius: '6px', marginTop: '8px' }}>
+                                                    <form onSubmit={(e) => {
+                                                        e.preventDefault();
+                                                        const formData = new FormData(e.currentTarget);
+                                                        const firstRequirement = provider.credential_requirements[0];
+                                                        const secret = String(formData.get(firstRequirement.key) ?? '');
+                                                        saveCredential(provider.id, firstRequirement.key, secret, firstRequirement.label);
+                                                    }}>
+                                                        {provider.credential_requirements.map(req => (
+                                                            <div key={req.key} style={{ marginBottom: '8px' }}>
+                                                                <label style={{ display: 'block', fontSize: '12px', marginBottom: '4px' }}>{req.label}</label>
+                                                                <input 
+                                                                    name={req.key} 
+                                                                    type={req.secret ? 'password' : 'text'} 
+                                                                    placeholder={req.description}
+                                                                    required={req.required}
+                                                                    style={{ width: '100%', padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)' }} 
+                                                                />
+                                                            </div>
+                                                        ))}
+                                                        <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                                                            <button type="submit" className="mac-btn">{t('usage.saveCredential', 'Save Credential')}</button>
+                                                            <button type="button" className="mac-btn danger-text" onClick={() => clearCredential(provider.id)}>{t('usage.clearCredential', 'Clear')}</button>
+                                                        </div>
+                                                    </form>
+                                                </div>
+                                            )}
+                                            {index < visibleUsageProviders.length - 1 && <div className="setting-divider" />}
+                                        </div>
+                                    ))}
+                                </div>
                             )}
                             {tab === 'about' && (
                                 <>
