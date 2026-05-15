@@ -249,7 +249,7 @@ fn redact_marker_values(input: &str, marker: &str) -> String {
         }
 
         let split_at = value
-            .find(|ch: char| matches!(ch, ',' | '\n' | '&' | ';' | '}' | ']'))
+            .find([',', '\n', '&', ';', '}', ']'])
             .unwrap_or(value.len());
         redacted.push_str("<redacted>");
         remaining = &value[split_at..];

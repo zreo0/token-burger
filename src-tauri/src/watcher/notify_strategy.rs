@@ -12,6 +12,13 @@ use notify_debouncer_full::{new_debouncer, DebouncedEvent};
 use crate::adapters::{all_adapters, codex};
 use crate::db::WriteRequest;
 
+struct PathChangeContext<'a> {
+    adapter_names: &'a [String],
+    adapters: &'a [Box<dyn crate::adapters::AgentAdapter>],
+    path_to_adapter: &'a HashMap<String, usize>,
+    write_tx: &'a Sender<WriteRequest>,
+}
+
 /// 基于 notify-debouncer-full 的实时监听策略
 ///
 /// 用 notify 推荐的系统 backend 监听文件变化，500ms debounce 后读取增量内容。
@@ -155,6 +162,13 @@ fn process_events(
     codex_model_cache: &mut HashMap<String, String>,
     write_tx: &Sender<WriteRequest>,
 ) {
+    let context = PathChangeContext {
+        adapter_names,
+        adapters,
+        path_to_adapter,
+        write_tx,
+    };
+
     for event in events {
         for path in &event.paths {
             let path_str = path.to_string_lossy().to_string();
@@ -162,12 +176,9 @@ fn process_events(
                 path,
                 &path_str,
                 "notify",
-                adapter_names,
-                adapters,
-                path_to_adapter,
+                &context,
                 file_offsets,
                 codex_model_cache,
-                write_tx,
             );
         }
     }
@@ -181,18 +192,22 @@ fn reconcile_registered_paths(
     codex_model_cache: &mut HashMap<String, String>,
     write_tx: &Sender<WriteRequest>,
 ) {
+    let context = PathChangeContext {
+        adapter_names,
+        adapters,
+        path_to_adapter,
+        write_tx,
+    };
+
     let paths: Vec<String> = path_to_adapter.keys().cloned().collect();
     for path_str in paths {
         process_path_change(
             std::path::Path::new(&path_str),
             &path_str,
             "reconcile",
-            adapter_names,
-            adapters,
-            path_to_adapter,
+            &context,
             file_offsets,
             codex_model_cache,
-            write_tx,
         );
     }
 }
@@ -201,19 +216,20 @@ fn process_path_change(
     path: &std::path::Path,
     path_str: &str,
     source: &str,
-    adapter_names: &[String],
-    adapters: &[Box<dyn crate::adapters::AgentAdapter>],
-    path_to_adapter: &HashMap<String, usize>,
+    context: &PathChangeContext<'_>,
     file_offsets: &mut HashMap<String, u64>,
     codex_model_cache: &mut HashMap<String, String>,
-    write_tx: &Sender<WriteRequest>,
 ) {
-    let adapter_idx = match path_to_adapter.get(path_str) {
+    let adapter_idx = match context.path_to_adapter.get(path_str) {
         Some(idx) => *idx,
         None => return,
     };
-    let agent_name = &adapter_names[adapter_idx];
-    let adapter = match adapters.iter().find(|a| a.agent_name() == agent_name) {
+    let agent_name = &context.adapter_names[adapter_idx];
+    let adapter = match context
+        .adapters
+        .iter()
+        .find(|a| a.agent_name() == agent_name)
+    {
         Some(a) => a,
         None => return,
     };
@@ -261,10 +277,10 @@ fn process_path_change(
                 agent_name,
                 logs.len()
             );
-            let _ = write_tx.send(WriteRequest::InsertTokenLogs(logs));
+            let _ = context.write_tx.send(WriteRequest::InsertTokenLogs(logs));
         }
         file_offsets.insert(path_str.to_string(), new_size);
-        let _ = write_tx.send(WriteRequest::UpdateOffset {
+        let _ = context.write_tx.send(WriteRequest::UpdateOffset {
             file_path: path_str.to_string(),
             offset: new_size,
         });
@@ -313,10 +329,10 @@ fn process_path_change(
             total_tokens,
             models
         );
-        let _ = write_tx.send(WriteRequest::InsertTokenLogs(logs));
+        let _ = context.write_tx.send(WriteRequest::InsertTokenLogs(logs));
     }
     file_offsets.insert(path_str.to_string(), new_size);
-    let _ = write_tx.send(WriteRequest::UpdateOffset {
+    let _ = context.write_tx.send(WriteRequest::UpdateOffset {
         file_path: path_str.to_string(),
         offset: new_size,
     });

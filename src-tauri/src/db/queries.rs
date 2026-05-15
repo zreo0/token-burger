@@ -218,8 +218,7 @@ fn build_agent_filter(enabled_agents: Option<&[String]>) -> String {
     match enabled_agents {
         Some([]) => " AND 1 = 0".to_string(),
         Some(agents) => {
-            let placeholders = std::iter::repeat("?")
-                .take(agents.len())
+            let placeholders = std::iter::repeat_n("?", agents.len())
                 .collect::<Vec<_>>()
                 .join(", ");
             format!(" AND agent_name IN ({})", placeholders)
