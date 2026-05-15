@@ -5,7 +5,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import { check, Update } from '@tauri-apps/plugin-updater';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { AnimatePresence, motion } from 'framer-motion';
-import type { AgentInfo, AppSettings, PlatformInfo } from '../../types';
+import type { AccountUsageProviderInfo, AgentInfo, AppSettings, PlatformInfo } from '../../types';
 import { getPlatformInfo } from '../../utils/platform';
 import { BURGER_THEMES } from '../../components/Burger/themes';
 import { useAccountUsageContext } from '../../context/AccountUsageContext';
@@ -13,7 +13,7 @@ import './index.css';
 
 type Tab = 'general' | 'agents' | 'data' | 'usage' | 'about';
 
-// 账号用量 Provider 逐个开放；其他平台待验证完成后再逐个上线。
+// 账号用量 Provider 逐个开放，菜单栏展示仅对可计算百分比的 Provider 启用。
 const ENABLED_USAGE_PROVIDER_IDS = new Set(['codex']);
 
 type UpdateStatus =
@@ -25,9 +25,19 @@ type UpdateStatus =
     | { state: 'ready-to-restart'; update: Update }
     | { state: 'error'; message: string };
 
+function canShowProviderInMenuBar(provider: AccountUsageProviderInfo): boolean {
+    return provider.capabilities.includes('account_quota');
+}
+
 function Settings() {
     const { t, i18n } = useTranslation();
-    const { providers: usageProviders, setEnabled: setUsageEnabled, saveCredential, clearCredential } = useAccountUsageContext();
+    const {
+        providers: usageProviders,
+        setEnabled: setUsageEnabled,
+        setMenuBarVisible,
+        saveCredential,
+        clearCredential,
+    } = useAccountUsageContext();
     const [tab, setTab] = useState<Tab>('general');
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -36,6 +46,7 @@ function Settings() {
     const [appVersion, setAppVersion] = useState('');
     const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ state: 'idle' });
     const visibleUsageProviders = usageProviders.filter(provider => ENABLED_USAGE_PROVIDER_IDS.has(provider.id));
+    const isMac = platformInfo?.platform === 'macos';
 
     useEffect(() => {
         getVersion().then(setAppVersion).catch(() => {});
@@ -341,6 +352,22 @@ function Settings() {
                                                     <span className="mac-toggle-slider" />
                                                 </label>
                                             </div>
+                                            {isMac && provider.enabled && canShowProviderInMenuBar(provider) && (
+                                                <div className="setting-row usage-menu-bar-row">
+                                                    <div className="agent-info">
+                                                        <span className="setting-label">{t('usage.menuBarDisplay')}</span>
+                                                        <span className="agent-status">{t('usage.menuBarDisplayHint')}</span>
+                                                    </div>
+                                                    <label className="mac-toggle">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={provider.show_in_menu_bar}
+                                                            onChange={(e) => setMenuBarVisible(provider.id, e.target.checked)}
+                                                        />
+                                                        <span className="mac-toggle-slider" />
+                                                    </label>
+                                                </div>
+                                            )}
                                             {provider.enabled && provider.credential_requirements?.length > 0 && (
                                                 <div style={{ padding: '12px', background: 'var(--bg-secondary)', borderRadius: '6px', marginTop: '8px' }}>
                                                     <form onSubmit={(e) => {
@@ -353,12 +380,12 @@ function Settings() {
                                                         {provider.credential_requirements.map(req => (
                                                             <div key={req.key} style={{ marginBottom: '8px' }}>
                                                                 <label style={{ display: 'block', fontSize: '12px', marginBottom: '4px' }}>{req.label}</label>
-                                                                <input 
-                                                                    name={req.key} 
-                                                                    type={req.secret ? 'password' : 'text'} 
+                                                                <input
+                                                                    name={req.key}
+                                                                    type={req.secret ? 'password' : 'text'}
                                                                     placeholder={req.description}
                                                                     required={req.required}
-                                                                    style={{ width: '100%', padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)' }} 
+                                                                    style={{ width: '100%', padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)' }}
                                                                 />
                                                             </div>
                                                         ))}

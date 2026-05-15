@@ -195,6 +195,14 @@ export function useAccountUsage() {
         }
     };
 
+    const setMenuBarVisible = async (providerId: string, showInMenuBar: boolean) => {
+        await invoke('set_account_usage_provider_menu_bar_visible', {
+            request: { provider_id: providerId, show_in_menu_bar: showInMenuBar },
+        });
+        const fetchedProviders = await invoke<AccountUsageProviderInfo[]>('list_account_usage_providers');
+        setProviders(fetchedProviders);
+    };
+
     const getProviderState = async (providerId: string): Promise<AccountUsageProviderState> => {
         return await invoke<AccountUsageProviderState>('get_account_usage_provider_state', { providerId });
     };
@@ -211,6 +219,7 @@ export function useAccountUsage() {
         saveCredential,
         clearCredential,
         setEnabled,
+        setMenuBarVisible,
         getProviderState,
         reload: loadData
     };

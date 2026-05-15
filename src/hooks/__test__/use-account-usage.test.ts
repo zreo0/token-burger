@@ -20,6 +20,7 @@ function provider(id: string, enabled: boolean): AccountUsageProviderInfo {
         id,
         display_name: id,
         enabled,
+        show_in_menu_bar: false,
         available: true,
         source: 'auth_file',
         confidence: 'high',

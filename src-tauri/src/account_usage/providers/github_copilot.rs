@@ -36,6 +36,7 @@ impl AccountUsageProvider for GithubCopilotUsageProvider {
             id: self.id().to_string(),
             display_name: "GitHub Copilot".to_string(),
             enabled: state.enabled,
+            show_in_menu_bar: state.show_in_menu_bar,
             available: state.credential_ref.is_some() || discover_developer_token().is_some(),
             source: AccountUsageSource::OfficialApi,
             confidence: AccountUsageConfidence::Medium,

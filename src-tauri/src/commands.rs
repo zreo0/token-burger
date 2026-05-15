@@ -3,7 +3,7 @@ use std::sync::Mutex;
 
 use tauri::{
     menu::{Menu, MenuBuilder, MenuItemBuilder},
-    AppHandle, Emitter, State,
+    AppHandle, Emitter, Manager, State,
 };
 
 use crate::account_usage::manager::AccountUsageManager;
@@ -41,6 +41,12 @@ pub struct SetAccountUsageProviderEnabledRequest {
     pub refresh_interval_secs: Option<u64>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct SetAccountUsageProviderMenuBarVisibleRequest {
+    pub provider_id: String,
+    pub show_in_menu_bar: bool,
+}
+
 pub fn tray_menu_labels(language: &str) -> (&'static str, &'static str) {
     if language == "zh-CN" {
         ("设置", "退出")
@@ -72,6 +78,22 @@ fn update_tray_menu_language(app: &AppHandle, language: &str) -> Result<(), Stri
 
 fn db_path_from(state: &AppState) -> PathBuf {
     PathBuf::from(&state.db_path)
+}
+
+pub(crate) fn sync_account_usage_tray_items(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let conn = match db::open_readonly(&db_path_from(&state)) {
+        Ok(conn) => conn,
+        Err(error) => {
+            log::warn!("读取菜单栏账号用量状态失败: {}", error);
+            return;
+        }
+    };
+    let enabled_agents = db::queries::get_enabled_agents(&conn);
+    if let Ok(summary) = db::queries::get_token_summary_for_agents(&conn, "today", &enabled_agents)
+    {
+        db::update_main_tray_title(app, &conn, summary.total);
+    }
 }
 
 /// 重启 Watcher 引擎（根据当前数据库中的设置重新创建）
@@ -343,6 +365,7 @@ pub fn refresh_account_usage_all(
 ) -> Result<Vec<AccountUsageSnapshot>, String> {
     let snapshots = redact_account_usage_snapshots(state.account_usage.refresh_all_enabled()?);
     let _ = app.emit("account-usage-updated", &snapshots);
+    sync_account_usage_tray_items(&app);
     Ok(snapshots)
 }
 
@@ -355,6 +378,7 @@ pub fn refresh_account_usage_provider(
     let snapshots =
         redact_account_usage_snapshots(state.account_usage.refresh_provider(&provider_id)?);
     let _ = app.emit("account-usage-updated", &snapshots);
+    sync_account_usage_tray_items(&app);
     Ok(snapshots)
 }
 
@@ -381,6 +405,7 @@ pub fn save_account_usage_credential(
         let _ = app.emit("account-usage-providers-updated", &providers);
     }
     let _ = app.emit("account-usage-updated", &snapshots);
+    sync_account_usage_tray_items(&app);
     Ok(provider_state)
 }
 
@@ -400,6 +425,7 @@ pub fn clear_account_usage_credential(
         let _ = app.emit("account-usage-providers-updated", &providers);
     }
     let _ = app.emit("account-usage-updated", &snapshots);
+    sync_account_usage_tray_items(&app);
     Ok(provider_state)
 }
 
@@ -425,6 +451,23 @@ pub fn set_account_usage_provider_enabled(
     if let Ok(providers) = state.account_usage.provider_infos() {
         let _ = app.emit("account-usage-providers-updated", &providers);
     }
+    sync_account_usage_tray_items(&app);
+    Ok(provider_state)
+}
+
+#[tauri::command]
+pub fn set_account_usage_provider_menu_bar_visible(
+    request: SetAccountUsageProviderMenuBarVisibleRequest,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<AccountUsageProviderState, String> {
+    let provider_state = state
+        .account_usage
+        .set_provider_menu_bar_visible(request.provider_id, request.show_in_menu_bar)?;
+    if let Ok(providers) = state.account_usage.provider_infos() {
+        let _ = app.emit("account-usage-providers-updated", &providers);
+    }
+    sync_account_usage_tray_items(&app);
     Ok(provider_state)
 }
 

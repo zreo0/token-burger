@@ -67,6 +67,8 @@
         "noData": "暂无账号用量数据",
         "notDetected": "未检测到认证文件或凭据",
         "experimentalWarning": "账号用量追踪是一项实验性功能。",
+        "menuBarDisplay": "菜单栏显示",
+        "menuBarDisplayHint": "显示 Provider 图标和用量百分比",
         "saveCredential": "保存凭据",
         "clearCredential": "清除"
     }

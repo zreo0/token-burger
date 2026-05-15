@@ -124,19 +124,69 @@ fn duration_until_next_local_day(now: chrono::DateTime<chrono::Local>) -> std::t
         .unwrap_or_else(|_| std::time::Duration::from_secs(1))
 }
 
-fn emit_token_summary(app_handle: &AppHandle, summary: &TokenSummary) {
-    let _ = app_handle.emit("token-updated", summary);
+pub(crate) fn update_main_tray_title(app_handle: &AppHandle, conn: &Connection, total: i64) {
     if let Some(tray) = app_handle.tray_by_id("main") {
-        let formatted = crate::commands::format_token_count(summary.total);
-        let _ = tray.set_title(Some(&formatted));
+        let token_title = crate::commands::format_token_count(total);
+        update_main_tray_icon(&tray);
+        update_main_tray_usage_title(&tray, conn, token_title);
     }
+}
+
+fn update_main_tray_icon(tray: &tauri::tray::TrayIcon) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = tray.set_icon(Some(tauri::include_image!("icons/tray-icon.png")));
+        let _ = tray.set_icon_as_template(true);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = tray;
+    }
+}
+
+fn update_main_tray_usage_title(
+    tray: &tauri::tray::TrayIcon,
+    conn: &Connection,
+    token_title: String,
+) {
+    #[cfg(target_os = "macos")]
+    {
+        let items = crate::tray_usage::account_usage_menu_bar_items(conn);
+        let fallback_title = if items.is_empty() {
+            token_title.clone()
+        } else {
+            let suffix = items
+                .iter()
+                .map(|item| item.usage_title())
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("{token_title} {suffix}")
+        };
+        if crate::tray_usage::set_main_tray_usage_title(tray, token_title, items).is_err() {
+            let _ = tray.set_title(Some(&fallback_title));
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let title = crate::tray_usage::account_usage_percentage_suffix(conn)
+            .map(|suffix| format!("{token_title} {suffix}"))
+            .unwrap_or(token_title);
+        let _ = tray.set_title(Some(&title));
+    }
+}
+
+fn emit_token_summary(app_handle: &AppHandle, conn: &Connection, summary: &TokenSummary) {
+    let _ = app_handle.emit("token-updated", summary);
+    update_main_tray_title(app_handle, conn, summary.total);
 }
 
 pub(crate) fn query_and_emit_today_summary(app_handle: &AppHandle, conn: &Connection) {
     let enabled_agents = queries::get_enabled_agents(conn);
     match queries::get_token_summary_for_agents(conn, "today", &enabled_agents) {
         Ok(summary) => {
-            emit_token_summary(app_handle, &summary);
+            emit_token_summary(app_handle, conn, &summary);
         }
         Err(e) => {
             log::error!("查询今日汇总失败: {}", e);
@@ -248,7 +298,7 @@ impl DbManager {
                                     "[db] 今日汇总: total={}, input={}, output={}, cache_read={}, cache_create={}, agent_cost=${:.2}",
                                     summary.total, summary.input, summary.output, summary.cache_read, summary.cache_create, summary.agent_cost
                                 );
-                                emit_token_summary(&app_handle, &summary);
+                                emit_token_summary(&app_handle, &conn, &summary);
                             }
                             Err(e) => {
                                 log::error!("查询汇总失败: {}", e);

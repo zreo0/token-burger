@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS account_usage_metrics (
 CREATE TABLE IF NOT EXISTS account_usage_provider_states (
     provider_id TEXT PRIMARY KEY,
     enabled INTEGER NOT NULL DEFAULT 0,
+    show_in_menu_bar INTEGER NOT NULL DEFAULT 0,
     refresh_interval_secs INTEGER NOT NULL,
     last_refresh_at TEXT,
     retry_after_until TEXT,
@@ -61,7 +62,32 @@ CREATE TABLE IF NOT EXISTS account_usage_provider_states (
 ";
 
 pub fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
-    conn.execute_batch(ACCOUNT_USAGE_SCHEMA_SQL)
+    conn.execute_batch(ACCOUNT_USAGE_SCHEMA_SQL)?;
+    ensure_provider_state_show_in_menu_bar_column(conn)?;
+    Ok(())
+}
+
+fn ensure_provider_state_show_in_menu_bar_column(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare("PRAGMA table_info(account_usage_provider_states)")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let mut has_column = false;
+
+    for row in rows {
+        if row? == "show_in_menu_bar" {
+            has_column = true;
+            break;
+        }
+    }
+
+    if !has_column {
+        conn.execute(
+            "ALTER TABLE account_usage_provider_states
+             ADD COLUMN show_in_menu_bar INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+
+    Ok(())
 }
 
 pub fn ensure_provider_state(
@@ -71,8 +97,8 @@ pub fn ensure_provider_state(
 ) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR IGNORE INTO account_usage_provider_states
-         (provider_id, enabled, refresh_interval_secs, auto_discovery_enabled, updated_at)
-         VALUES (?1, 0, ?2, 0, CURRENT_TIMESTAMP)",
+         (provider_id, enabled, show_in_menu_bar, refresh_interval_secs, auto_discovery_enabled, updated_at)
+         VALUES (?1, 0, 0, ?2, 0, CURRENT_TIMESTAMP)",
         params![provider_id, refresh_interval_secs as i64],
     )?;
     Ok(())
@@ -284,7 +310,7 @@ pub fn get_provider_state(
 ) -> Result<Option<AccountUsageProviderState>, rusqlite::Error> {
     conn.query_row(
         "SELECT provider_id, enabled, refresh_interval_secs, last_refresh_at, retry_after_until,
-                credential_ref, credential_label, auto_discovery_enabled
+                credential_ref, credential_label, auto_discovery_enabled, show_in_menu_bar
          FROM account_usage_provider_states WHERE provider_id = ?1",
         params![provider_id],
         provider_state_from_row,
@@ -297,7 +323,7 @@ pub fn list_provider_states(
 ) -> Result<Vec<AccountUsageProviderState>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT provider_id, enabled, refresh_interval_secs, last_refresh_at, retry_after_until,
-                credential_ref, credential_label, auto_discovery_enabled
+                credential_ref, credential_label, auto_discovery_enabled, show_in_menu_bar
          FROM account_usage_provider_states ORDER BY provider_id",
     )?;
     let rows = stmt.query_map([], provider_state_from_row)?;
@@ -314,6 +340,7 @@ fn provider_state_from_row(
     Ok(AccountUsageProviderState {
         provider_id: row.get(0)?,
         enabled: row.get::<_, i64>(1)? != 0,
+        show_in_menu_bar: row.get::<_, i64>(8)? != 0,
         refresh_interval_secs: row.get::<_, i64>(2)? as u64,
         last_refresh_at: row.get(3)?,
         retry_after_until: row.get(4)?,
@@ -329,11 +356,12 @@ pub fn upsert_provider_state(
 ) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT INTO account_usage_provider_states
-         (provider_id, enabled, refresh_interval_secs, last_refresh_at, retry_after_until,
-          credential_ref, credential_label, auto_discovery_enabled, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)
+         (provider_id, enabled, show_in_menu_bar, refresh_interval_secs, last_refresh_at,
+          retry_after_until, credential_ref, credential_label, auto_discovery_enabled, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP)
          ON CONFLICT(provider_id) DO UPDATE SET
             enabled = excluded.enabled,
+            show_in_menu_bar = excluded.show_in_menu_bar,
             refresh_interval_secs = excluded.refresh_interval_secs,
             last_refresh_at = excluded.last_refresh_at,
             retry_after_until = excluded.retry_after_until,
@@ -344,6 +372,7 @@ pub fn upsert_provider_state(
         params![
             state.provider_id,
             state.enabled as i32,
+            state.show_in_menu_bar as i32,
             state.refresh_interval_secs as i64,
             state.last_refresh_at,
             state.retry_after_until,
@@ -465,6 +494,7 @@ mod tests {
         let state = AccountUsageProviderState {
             provider_id: "cursor".to_string(),
             enabled: true,
+            show_in_menu_bar: true,
             refresh_interval_secs: 600,
             last_refresh_at: None,
             retry_after_until: None,
@@ -473,6 +503,8 @@ mod tests {
             auto_discovery_enabled: false,
         };
         upsert_provider_state(&conn, &state).unwrap();
+        let stored = get_provider_state(&conn, "cursor").unwrap().unwrap();
+        assert!(stored.show_in_menu_bar);
 
         let raw_secret = "secret-cookie-value";
         let rows: String = conn

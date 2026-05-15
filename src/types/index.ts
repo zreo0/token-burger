@@ -116,6 +116,7 @@ export interface AccountUsageProviderInfo {
     id: string;
     display_name: string;
     enabled: boolean;
+    show_in_menu_bar: boolean;
     available: boolean;
     source: AccountUsageSource;
     confidence: AccountUsageConfidence;
@@ -164,6 +165,7 @@ export interface AccountUsageSnapshot {
 export interface AccountUsageProviderState {
     provider_id: string;
     enabled: boolean;
+    show_in_menu_bar: boolean;
     refresh_interval_secs: number;
     last_refresh_at?: string;
     retry_after_until?: string;

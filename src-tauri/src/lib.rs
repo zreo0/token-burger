@@ -4,6 +4,7 @@ mod commands;
 mod db;
 pub mod logger;
 mod pricing;
+mod tray_usage;
 mod types;
 mod watcher;
 
@@ -105,6 +106,22 @@ fn position_popup_window<R: Runtime>(app: &AppHandle<R>, popup: &WebviewWindow<R
         .is_err()
     {
         let _ = popup.set_position(LogicalPosition::new(x, y));
+    }
+}
+
+pub(crate) fn toggle_popup_window<R: Runtime>(app: &AppHandle<R>, rect: &Rect) {
+    if let Some(window) = app.get_webview_window(POPUP_WINDOW_LABEL) {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.hide();
+        } else {
+            position_popup_window(app, &window, rect);
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    } else if let Ok(window) = ensure_popup_window(app, rect) {
+        position_popup_window(app, &window, rect);
+        let _ = window.show();
+        let _ = window.set_focus();
     }
 }
 
@@ -293,22 +310,12 @@ pub fn run() {
                     } = event
                     {
                         let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window(POPUP_WINDOW_LABEL) {
-                            if window.is_visible().unwrap_or(false) {
-                                let _ = window.hide();
-                            } else {
-                                position_popup_window(app, &window, &rect);
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
-                        } else if let Ok(window) = ensure_popup_window(app, &rect) {
-                            position_popup_window(app, &window, &rect);
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        toggle_popup_window(app, &rect);
                     }
                 })
                 .build(app)?;
+
+            commands::sync_account_usage_tray_items(app.handle());
 
             // settings 窗口关闭时改为隐藏，避免被销毁后无法重新打开
             if let Some(settings_win) = app.get_webview_window("settings") {
@@ -340,6 +347,7 @@ pub fn run() {
             commands::clear_account_usage_credential,
             commands::get_account_usage_provider_state,
             commands::set_account_usage_provider_enabled,
+            commands::set_account_usage_provider_menu_bar_visible,
             resize_popup_window,
             restart_app,
         ])

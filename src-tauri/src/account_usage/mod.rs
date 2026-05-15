@@ -82,6 +82,7 @@ pub struct AccountUsageProviderInfo {
     pub id: String,
     pub display_name: String,
     pub enabled: bool,
+    pub show_in_menu_bar: bool,
     pub available: bool,
     pub source: AccountUsageSource,
     pub confidence: AccountUsageConfidence,
@@ -144,6 +145,7 @@ pub struct AccountUsageSnapshot {
 pub struct AccountUsageProviderState {
     pub provider_id: String,
     pub enabled: bool,
+    pub show_in_menu_bar: bool,
     pub refresh_interval_secs: u64,
     pub last_refresh_at: Option<String>,
     pub retry_after_until: Option<String>,

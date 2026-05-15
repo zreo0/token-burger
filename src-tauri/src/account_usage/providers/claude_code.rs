@@ -23,6 +23,7 @@ impl AccountUsageProvider for ClaudeCodeUsageProvider {
             id: self.id().to_string(),
             display_name: "Claude Code".to_string(),
             enabled: state.enabled,
+            show_in_menu_bar: state.show_in_menu_bar,
             available: true,
             source: AccountUsageSource::LocalLogs,
             confidence: AccountUsageConfidence::High,
@@ -116,6 +117,7 @@ mod tests {
         let state = AccountUsageProviderState {
             provider_id: provider.id().to_string(),
             enabled: true,
+            show_in_menu_bar: false,
             refresh_interval_secs: provider.default_refresh_interval_secs(),
             last_refresh_at: None,
             retry_after_until: None,

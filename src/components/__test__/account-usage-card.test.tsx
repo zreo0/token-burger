@@ -21,6 +21,7 @@ const baseProvider: AccountUsageProviderInfo = {
     id: 'codex',
     display_name: 'Codex',
     enabled: true,
+    show_in_menu_bar: false,
     available: true,
     source: 'auth_file',
     confidence: 'high',

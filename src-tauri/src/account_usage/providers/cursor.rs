@@ -31,6 +31,7 @@ impl AccountUsageProvider for CursorUsageProvider {
             id: self.id().to_string(),
             display_name: "Cursor".to_string(),
             enabled: state.enabled,
+            show_in_menu_bar: state.show_in_menu_bar,
             available: state.credential_ref.is_some(),
             source: AccountUsageSource::InternalApi,
             confidence: AccountUsageConfidence::Low,
@@ -378,6 +379,7 @@ mod tests {
         let state = AccountUsageProviderState {
             provider_id: provider.id().to_string(),
             enabled: true,
+            show_in_menu_bar: false,
             refresh_interval_secs: provider.default_refresh_interval_secs(),
             last_refresh_at: None,
             retry_after_until: None,

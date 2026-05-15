@@ -195,6 +195,24 @@ impl AccountUsageManager {
         Ok(state)
     }
 
+    pub fn set_provider_menu_bar_visible(
+        &self,
+        provider_id: String,
+        show_in_menu_bar: bool,
+    ) -> Result<AccountUsageProviderState, String> {
+        let conn = Connection::open(&self.db_path).map_err(|error| error.to_string())?;
+        let provider = self.provider_by_id(&provider_id)?;
+        let mut state = self.state_or_default(
+            &conn,
+            provider.id(),
+            provider.default_refresh_interval_secs(),
+        )?;
+        state.show_in_menu_bar = show_in_menu_bar;
+        crate::account_usage::store::upsert_provider_state(&conn, &state)
+            .map_err(|error| error.to_string())?;
+        Ok(state)
+    }
+
     pub fn provider_state(&self, provider_id: String) -> Result<AccountUsageProviderState, String> {
         let conn = Connection::open(&self.db_path).map_err(|error| error.to_string())?;
         let provider = self.provider_by_id(&provider_id)?;
@@ -226,6 +244,7 @@ impl AccountUsageManager {
                 let state = AccountUsageProviderState {
                     provider_id: provider_id.to_string(),
                     enabled: false,
+                    show_in_menu_bar: false,
                     refresh_interval_secs,
                     last_refresh_at: None,
                     retry_after_until: None,

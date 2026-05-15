@@ -67,6 +67,8 @@
         "noData": "No account usage data yet",
         "notDetected": "Auth file or credential not detected",
         "experimentalWarning": "Account usage tracking is an experimental feature.",
+        "menuBarDisplay": "Menu bar display",
+        "menuBarDisplayHint": "Show the provider icon and usage percent",
         "saveCredential": "Save Credential",
         "clearCredential": "Clear"
     }

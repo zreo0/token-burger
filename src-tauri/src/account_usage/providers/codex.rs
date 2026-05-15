@@ -34,6 +34,7 @@ impl AccountUsageProvider for CodexUsageProvider {
             id: self.id().to_string(),
             display_name: "Codex".to_string(),
             enabled: state.enabled,
+            show_in_menu_bar: state.show_in_menu_bar,
             available: self.detect(),
             source: AccountUsageSource::AuthFile,
             confidence: AccountUsageConfidence::High,
