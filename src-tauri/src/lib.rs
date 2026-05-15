@@ -243,7 +243,7 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             let icon = tauri::include_image!("icons/icon-windows.png");
             #[cfg(not(target_os = "windows"))]
-            let icon = tauri::include_image!("icons/icon.png");
+            let icon = tauri::include_image!("icons/tray-icon.png");
 
             // 构建右键上下文菜单
             let menu = commands::build_tray_menu(app.handle(), &language)?;

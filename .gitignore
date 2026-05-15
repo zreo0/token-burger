@@ -14,6 +14,13 @@ src-tauri/target/
 *.log
 logs/
 
+# Tauri icon command also emits mobile/store assets that this desktop app does not bundle
+src-tauri/icons/64x64.png
+src-tauri/icons/StoreLogo.png
+src-tauri/icons/Square*.png
+src-tauri/icons/android/
+src-tauri/icons/ios/
+
 # Editor
 .idea/
 *.swp
