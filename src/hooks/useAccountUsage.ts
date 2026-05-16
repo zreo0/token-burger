@@ -44,6 +44,12 @@ async function refreshEnabledProviders() {
     return await invoke<AccountUsageSnapshot[]>('refresh_account_usage_all');
 }
 
+function runAfterFirstPaint(callback: () => void) {
+    window.requestAnimationFrame(() => {
+        window.setTimeout(callback, 0);
+    });
+}
+
 export function useAccountUsage() {
     const [snapshots, setSnapshots] = useState<AccountUsageSnapshot[]>([]);
     const [providers, setProviders] = useState<AccountUsageProviderInfo[]>([]);
@@ -62,14 +68,16 @@ export function useAccountUsage() {
             setProviders(fetchedProviders);
             setSnapshots(filterSnapshotsByEnabledProviders(fetchedSnapshots, fetchedProviders));
             if (fetchedProviders.some(provider => provider.enabled)) {
-                setRefreshing(true);
-                refreshEnabledProviders()
-                    .then((newSnapshots) => {
-                        setSnapshots(prev => mergeAccountUsageSnapshots(prev, newSnapshots));
-                        setProviderErrors({});
-                    })
-                    .catch((err) => console.error('Failed to refresh enabled account usage providers:', err))
-                    .finally(() => setRefreshing(false));
+                runAfterFirstPaint(() => {
+                    setRefreshing(true);
+                    refreshEnabledProviders()
+                        .then((newSnapshots) => {
+                            setSnapshots(prev => mergeAccountUsageSnapshots(prev, newSnapshots));
+                            setProviderErrors({});
+                        })
+                        .catch((err) => console.error('Failed to refresh enabled account usage providers:', err))
+                        .finally(() => setRefreshing(false));
+                });
             }
         } catch (err) {
             console.error('Failed to load account usage data:', err);

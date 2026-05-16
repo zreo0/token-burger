@@ -38,6 +38,9 @@ body {
     background: #f2f2f7;
 }
 
+html.popup-window-root,
+html.popup-window-root body,
+html.popup-window-root #root,
 body.popup-window,
 body.popup-window #root {
     background: transparent;
@@ -49,6 +52,9 @@ body.popup-window #root {
         background: #1c1c1e;
     }
 
+    html.popup-window-root,
+    html.popup-window-root body,
+    html.popup-window-root #root,
     body.popup-window,
     body.popup-window #root {
         background: transparent;

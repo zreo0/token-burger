@@ -12,12 +12,12 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, LogicalPosition, LogicalSize, Manager, Rect, Runtime, WebviewUrl, WebviewWindow,
 };
-use tauri_plugin_positioner::{Position as TrayPosition, WindowExt};
 
 const POPUP_WINDOW_LABEL: &str = "popup";
 const POPUP_WINDOW_WIDTH: f64 = 390.0;
 const POPUP_WINDOW_HEIGHT: f64 = 540.0;
 const POPUP_WINDOW_MAX_HEIGHT: f64 = 680.0;
+const POPUP_OFFSCREEN_POSITION: f64 = -10_000.0;
 
 fn attach_popup_auto_hide<R: Runtime>(_popup: &WebviewWindow<R>) {
     #[cfg(not(debug_assertions))]
@@ -57,13 +57,15 @@ fn get_popup_initial_position<R: Runtime>(app: &AppHandle<R>, rect: &Rect) -> (f
 
 fn ensure_popup_window<R: Runtime>(
     app: &AppHandle<R>,
-    rect: &Rect,
+    rect: Option<&Rect>,
 ) -> tauri::Result<WebviewWindow<R>> {
     if let Some(window) = app.get_webview_window(POPUP_WINDOW_LABEL) {
         return Ok(window);
     }
 
-    let (x, y) = get_popup_initial_position(app, rect);
+    let (x, y) = rect
+        .map(|rect| get_popup_initial_position(app, rect))
+        .unwrap_or((POPUP_OFFSCREEN_POSITION, POPUP_OFFSCREEN_POSITION));
 
     #[cfg(target_os = "windows")]
     let transparent = false;
@@ -97,16 +99,16 @@ fn ensure_popup_window<R: Runtime>(
     Ok(popup)
 }
 
+fn prewarm_popup_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Err(error) = ensure_popup_window(app, None) {
+        log::warn!("预热弹窗失败: {}", error);
+    }
+}
+
 fn position_popup_window<R: Runtime>(app: &AppHandle<R>, popup: &WebviewWindow<R>, rect: &Rect) {
     let (x, y) = get_popup_initial_position(app, rect);
     let _ = popup.set_visible_on_all_workspaces(true);
-
-    if popup
-        .move_window_constrained(TrayPosition::TrayBottomCenter)
-        .is_err()
-    {
-        let _ = popup.set_position(LogicalPosition::new(x, y));
-    }
+    let _ = popup.set_position(LogicalPosition::new(x, y));
 }
 
 pub(crate) fn toggle_popup_window<R: Runtime>(app: &AppHandle<R>, rect: &Rect) {
@@ -115,14 +117,17 @@ pub(crate) fn toggle_popup_window<R: Runtime>(app: &AppHandle<R>, rect: &Rect) {
             let _ = window.hide();
         } else {
             position_popup_window(app, &window, rect);
-            let _ = window.show();
-            let _ = window.set_focus();
+            show_popup(&window);
         }
-    } else if let Ok(window) = ensure_popup_window(app, rect) {
+    } else if let Ok(window) = ensure_popup_window(app, Some(rect)) {
         position_popup_window(app, &window, rect);
-        let _ = window.show();
-        let _ = window.set_focus();
+        show_popup(&window);
     }
+}
+
+fn show_popup<R: Runtime>(window: &WebviewWindow<R>) {
+    let _ = window.show();
+    let _ = window.set_focus();
 }
 
 #[tauri::command]
@@ -316,6 +321,7 @@ pub fn run() {
                 .build(app)?;
 
             commands::sync_account_usage_tray_items(app.handle());
+            prewarm_popup_window(app.handle());
 
             // settings 窗口关闭时改为隐藏，避免被销毁后无法重新打开
             if let Some(settings_win) = app.get_webview_window("settings") {

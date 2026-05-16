@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -38,8 +38,8 @@ export function getTopModels(byModel: Record<string, TokenBreakdown> | null | un
         .slice(0, 2);
 }
 
-export function getPopupWindowHeight(hasAccountSnapshot: boolean, contentHeight: number): number {
-    if (!hasAccountSnapshot || !Number.isFinite(contentHeight) || contentHeight <= 0) {
+export function getPopupWindowHeight(hasAccountUsage: boolean, contentHeight: number): number {
+    if (!hasAccountUsage || !Number.isFinite(contentHeight) || contentHeight <= 0) {
         return POPUP_BASE_HEIGHT;
     }
 
@@ -58,11 +58,14 @@ export function Popup() {
     const [pricingReady, setPricingReady] = useState(false);
     const [colorTheme, setColorTheme] = useState(DEFAULT_THEME_ID);
     const [isWindows, setIsWindows] = useState(false);
+    const lastPopupHeight = useRef<number | null>(null);
 
     useLayoutEffect(() => {
+        document.documentElement.classList.add('popup-window-root');
         document.body.classList.add('popup-window');
 
         return () => {
+            document.documentElement.classList.remove('popup-window-root');
             document.body.classList.remove('popup-window');
         };
     }, []);
@@ -110,18 +113,20 @@ export function Popup() {
     const isCostLoading = loading || !pricingReady;
     const topModels = getTopModels(summary?.by_model);
     const enabledProviderIds = new Set(providers.filter(provider => provider.enabled).map(provider => provider.id));
-    const hasAccountSnapshot = snapshots.some(snapshot => enabledProviderIds.has(snapshot.provider_id));
+    const hasAccountUsage = enabledProviderIds.size > 0 || snapshots.some(snapshot => enabledProviderIds.has(snapshot.provider_id));
 
     useLayoutEffect(() => {
         const frame = window.requestAnimationFrame(() => {
             const container = document.querySelector<HTMLElement>('.popup-container');
-            const height = getPopupWindowHeight(hasAccountSnapshot, container?.scrollHeight ?? POPUP_BASE_HEIGHT);
+            const height = getPopupWindowHeight(hasAccountUsage, container?.scrollHeight ?? POPUP_BASE_HEIGHT);
 
+            if (lastPopupHeight.current === height) return;
+            lastPopupHeight.current = height;
             invoke('resize_popup_window', { height }).catch(() => {});
         });
 
         return () => window.cancelAnimationFrame(frame);
-    }, [hasAccountSnapshot, snapshots.length, providers.length, topModels.length, coldStart, isSummaryLoading, isCostLoading]);
+    }, [hasAccountUsage, snapshots.length, providers.length, topModels.length, coldStart, isSummaryLoading, isCostLoading]);
 
     if (error) {
         return (

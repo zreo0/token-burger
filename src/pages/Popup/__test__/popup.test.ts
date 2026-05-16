@@ -39,12 +39,12 @@ describe('getTopModels', () => {
 });
 
 describe('getPopupWindowHeight', () => {
-    it('无账号快照时保持默认高度', () => {
+    it('无账号用量内容时保持默认高度', () => {
         expect(getPopupWindowHeight(false, 640)).toBe(540);
         expect(getPopupWindowHeight(false, 0)).toBe(540);
     });
 
-    it('有账号快照时按内容动态增高并限制最大值', () => {
+    it('有账号用量内容时按内容动态增高并限制最大值', () => {
         expect(getPopupWindowHeight(true, 520)).toBe(540);
         expect(getPopupWindowHeight(true, 620.2)).toBe(623);
         expect(getPopupWindowHeight(true, 900)).toBe(680);
