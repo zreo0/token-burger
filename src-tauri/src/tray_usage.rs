@@ -41,7 +41,7 @@ pub(crate) fn account_usage_menu_bar_items(conn: &rusqlite::Connection) -> Vec<M
     build_account_usage_menu_bar_items(&states, &snapshots)
 }
 
-#[cfg(any(test, not(target_os = "macos")))]
+#[cfg(test)]
 pub(crate) fn build_account_usage_percentage_suffix(
     states: &[AccountUsageProviderState],
     snapshots: &[AccountUsageSnapshot],
