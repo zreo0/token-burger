@@ -33,6 +33,33 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes
+        id: release_notes
+        shell: bash
+        run: |
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+          CURRENT_COMMIT="$(git rev-list -n 1 "${CURRENT_TAG}")"
+          PREVIOUS_TAG="$(git describe --tags --match 'v*' --abbrev=0 "${CURRENT_COMMIT}^" 2>/dev/null || true)"
+
+          if [ -n "${PREVIOUS_TAG}" ]; then
+            git log "${PREVIOUS_TAG}..${CURRENT_TAG}" --pretty=format:'- %s' > release-notes.md
+          else
+            git log "${CURRENT_TAG}" --pretty=format:'- %s' > release-notes.md
+          fi
+
+          if [ ! -s release-notes.md ]; then
+            echo '- No commit changes.' > release-notes.md
+          fi
+
+          {
+            echo 'body<<EOF'
+            cat release-notes.md
+            echo
+            echo 'EOF'
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -78,7 +105,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: 'TokenBurger v__VERSION__'
-          releaseBody: 'See the assets to download and install this version.'
+          releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
