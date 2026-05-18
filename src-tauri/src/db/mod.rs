@@ -127,21 +127,7 @@ fn duration_until_next_local_day(now: chrono::DateTime<chrono::Local>) -> std::t
 pub(crate) fn update_main_tray_title(app_handle: &AppHandle, conn: &Connection, total: i64) {
     if let Some(tray) = app_handle.tray_by_id("main") {
         let token_title = crate::commands::format_token_count(total);
-        update_main_tray_icon(&tray);
         update_main_tray_usage_title(&tray, conn, token_title);
-    }
-}
-
-fn update_main_tray_icon(tray: &tauri::tray::TrayIcon) {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = tray.set_icon(Some(tauri::include_image!("icons/tray-icon.png")));
-        let _ = tray.set_icon_as_template(true);
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = tray;
     }
 }
 
