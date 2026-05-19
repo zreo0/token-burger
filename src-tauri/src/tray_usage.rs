@@ -90,9 +90,9 @@ pub(crate) fn set_main_tray_usage_title(
 ) -> tauri::Result<()> {
     let (plain_title, markers) = build_title_with_icon_markers(&token_title, &items);
 
-    tray.set_title(Some(&plain_title))?;
     tray.with_inner_tray_icon(move |inner| {
         use objc2::{AnyThread, MainThreadMarker};
+        use objc2_foundation::NSString;
         use objc2_foundation::{NSMutableAttributedString, NSRange};
 
         let Some(status_item) = inner.ns_status_item() else {
@@ -105,6 +105,7 @@ pub(crate) fn set_main_tray_usage_title(
             return;
         };
 
+        button.setTitle(&NSString::from_str(&plain_title));
         let attributed_title = button.attributedTitle();
         let title_color = attributed_title_color(&attributed_title);
         let mutable_title = NSMutableAttributedString::initWithAttributedString(
@@ -124,6 +125,12 @@ pub(crate) fn set_main_tray_usage_title(
         }
 
         button.setAttributedTitle(&mutable_title);
+
+        // 同步 Tauri 覆盖在 status item 上的事件层尺寸，避免标题宽度变化后点击区域滞后。
+        let frame = button.frame();
+        for view in button.subviews().iter() {
+            view.setFrame(frame);
+        }
     })
 }
 
