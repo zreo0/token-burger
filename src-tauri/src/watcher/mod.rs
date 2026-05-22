@@ -18,6 +18,40 @@ use crate::adapters::{AgentAdapter, DataSource};
 use crate::db::WriteRequest;
 use crate::types::ColdStartProgress;
 
+fn sqlite_offset_key(db_path: &std::path::Path) -> String {
+    format!("sqlite:{}", db_path.to_string_lossy())
+}
+
+fn insert_logs_and_update_offset(
+    write_tx: &Sender<WriteRequest>,
+    logs: Vec<crate::adapters::TokenLog>,
+    file_path: String,
+    offset: u64,
+) -> bool {
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    if let Err(e) = write_tx.send(WriteRequest::InsertTokenLogsAndUpdateOffset {
+        logs,
+        file_path,
+        offset,
+        result_tx,
+    }) {
+        log::warn!("发送日志与 offset 原子写入请求失败: {}", e);
+        return false;
+    }
+
+    match result_rx.recv() {
+        Ok(Ok(())) => true,
+        Ok(Err(e)) => {
+            log::warn!("日志与 offset 原子写入失败，将在下轮重试: {}", e);
+            false
+        }
+        Err(e) => {
+            log::warn!("等待日志与 offset 原子写入结果失败: {}", e);
+            false
+        }
+    }
+}
+
 /// Watcher 配置
 pub struct WatcherConfig {
     pub watch_mode: String,
@@ -45,19 +79,22 @@ impl WatcherEngine {
 
         let handle = thread::spawn(move || {
             // 阶段一：冷启动——解析历史数据
-            let known_offsets = offset::load_offsets_from_db(&db_path);
+            let mut known_offsets = offset::load_offsets_from_db(&db_path);
             let total = adapters.len() as u32;
             log::info!(target: "token_burger::watcher", "冷启动开始: {} 个 adapter, 已知 {} 个文件 offset", total, known_offsets.len());
             for (idx, adapter) in adapters.iter().enumerate() {
                 if flag.load(Ordering::Relaxed) {
                     return;
                 }
-                cold_start_adapter(
+                let updated_offsets = cold_start_adapter(
                     adapter.as_ref(),
                     &write_tx,
                     config.keep_days,
                     &known_offsets,
                 );
+                for (key, offset) in updated_offsets {
+                    known_offsets.insert(key, offset);
+                }
 
                 let _ = app_handle.emit(
                     "cold-start-progress",
@@ -73,7 +110,14 @@ impl WatcherEngine {
             log::info!(target: "token_burger::watcher", "冷启动完成");
 
             // 阶段二：正常监听模式
-            start_watchers(&adapters, &write_tx, &flag, &config, &db_path);
+            start_watchers(
+                &adapters,
+                &write_tx,
+                &flag,
+                &config,
+                &db_path,
+                &known_offsets,
+            );
         });
 
         WatcherEngine {
@@ -93,7 +137,15 @@ impl WatcherEngine {
         let flag = stop_flag.clone();
 
         let handle = thread::spawn(move || {
-            start_watchers(&adapters, &write_tx, &flag, &config, &db_path);
+            let known_offsets = offset::load_offsets_from_db(&db_path);
+            start_watchers(
+                &adapters,
+                &write_tx,
+                &flag,
+                &config,
+                &db_path,
+                &known_offsets,
+            );
         });
 
         WatcherEngine {
@@ -118,9 +170,13 @@ pub fn catch_up_adapters(
     db_path: PathBuf,
 ) {
     thread::spawn(move || {
-        let known_offsets = offset::load_offsets_from_db(&db_path);
+        let mut known_offsets = offset::load_offsets_from_db(&db_path);
         for adapter in adapters {
-            cold_start_adapter(adapter.as_ref(), &write_tx, keep_days, &known_offsets);
+            let updated_offsets =
+                cold_start_adapter(adapter.as_ref(), &write_tx, keep_days, &known_offsets);
+            for (key, offset) in updated_offsets {
+                known_offsets.insert(key, offset);
+            }
         }
     });
 }
@@ -131,7 +187,8 @@ fn cold_start_adapter(
     write_tx: &Sender<WriteRequest>,
     keep_days: u32,
     known_offsets: &std::collections::HashMap<String, u64>,
-) {
+) -> Vec<(String, u64)> {
+    let mut updated_offsets = Vec::new();
     let cutoff = chrono::Local::now() - chrono::Duration::days(keep_days as i64);
     let cutoff_ts = cutoff.timestamp();
     let agent = adapter.agent_name();
@@ -186,10 +243,13 @@ fn cold_start_adapter(
 
                             // 冷启动完成后立即落盘 offset，避免下次启动重复扫描。
                             if let Ok(meta) = std::fs::metadata(&entry) {
+                                let path_str = entry.to_string_lossy().to_string();
+                                let offset = meta.len();
                                 let _ = write_tx.send(WriteRequest::UpdateOffset {
-                                    file_path: entry.to_string_lossy().to_string(),
-                                    offset: meta.len(),
+                                    file_path: path_str.clone(),
+                                    offset,
                                 });
+                                updated_offsets.push((path_str, offset));
                             }
                         }
                     }
@@ -207,12 +267,41 @@ fn cold_start_adapter(
         }
         DataSource::Sqlite { db_path } => {
             if db_path.exists() {
-                log::info!("[冷启动] {}: 查询外部 SQLite {}", agent, db_path.display());
-                match adapter.query_db(&db_path, None) {
-                    Ok(logs) => {
+                let offset_key = sqlite_offset_key(&db_path);
+                let since = known_offsets.get(&offset_key).copied();
+                log::info!(
+                    "[冷启动] {}: 查询外部 SQLite {} since={:?}",
+                    agent,
+                    db_path.display(),
+                    since
+                );
+                match adapter.query_db(&db_path, since) {
+                    Ok((logs, high_watermark)) => {
                         log::info!("[冷启动] {} 完成: {} 条记录", agent, logs.len());
-                        if !logs.is_empty() {
-                            let _ = write_tx.send(WriteRequest::InsertTokenLogs(logs));
+                        let has_logs = !logs.is_empty();
+                        match high_watermark {
+                            Some(offset) if has_logs => {
+                                if !insert_logs_and_update_offset(
+                                    write_tx,
+                                    logs,
+                                    offset_key.clone(),
+                                    offset,
+                                ) {
+                                    return updated_offsets;
+                                }
+                                updated_offsets.push((offset_key, offset));
+                            }
+                            Some(offset) => {
+                                let _ = write_tx.send(WriteRequest::UpdateOffset {
+                                    file_path: offset_key.clone(),
+                                    offset,
+                                });
+                                updated_offsets.push((offset_key, offset));
+                            }
+                            None if has_logs => {
+                                let _ = write_tx.send(WriteRequest::InsertTokenLogs(logs));
+                            }
+                            None => {}
                         }
                     }
                     Err(e) => {
@@ -224,6 +313,7 @@ fn cold_start_adapter(
             }
         }
     }
+    updated_offsets
 }
 
 /// 启动持续监听（各策略，根据 watch_mode 决定）
@@ -232,7 +322,8 @@ fn start_watchers(
     write_tx: &Sender<WriteRequest>,
     stop_flag: &Arc<AtomicBool>,
     config: &WatcherConfig,
-    db_path: &std::path::Path,
+    _db_path: &std::path::Path,
+    known_offsets: &std::collections::HashMap<String, u64>,
 ) {
     // 分组
     let mut jsonl_adapters: Vec<&dyn AgentAdapter> = Vec::new();
@@ -263,7 +354,7 @@ fn start_watchers(
         let log_patterns: Vec<Vec<String>> = jsonl_adapters.iter().map(|a| a.log_paths()).collect();
 
         if is_realtime {
-            let initial_offsets = offset::load_offsets_from_db(db_path);
+            let initial_offsets = known_offsets.clone();
             thread::spawn(move || {
                 notify_strategy::run_notify_polling(
                     adapter_names,
@@ -302,9 +393,12 @@ fn start_watchers(
             let flag = stop_flag.clone();
             let dp = adapter_db_path.clone();
             let name = adapter.agent_name().to_string();
+            let initial_offset = known_offsets
+                .get(&sqlite_offset_key(adapter_db_path))
+                .copied();
 
             thread::spawn(move || {
-                sqlite_strategy::run_sqlite_polling(name, dp, tx, flag, poll_secs);
+                sqlite_strategy::run_sqlite_polling(name, dp, tx, flag, poll_secs, initial_offset);
             });
         }
     }

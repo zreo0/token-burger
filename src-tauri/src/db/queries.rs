@@ -5,6 +5,27 @@ use rusqlite::{params, params_from_iter, Connection};
 use crate::adapters::TokenLog;
 use crate::types::{AppSettings, TokenSummary};
 
+const BATCH_SIZE: usize = 1000;
+
+const INSERT_TOKEN_LOG_SQL: &str = "
+    INSERT INTO token_logs
+    (agent_name, provider, model_id, token_type, token_count,
+     session_id, request_id, latency_ms, is_error, metadata, cost, timestamp)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+    ON CONFLICT(request_id, token_type) DO UPDATE SET
+        agent_name = excluded.agent_name,
+        provider = excluded.provider,
+        model_id = excluded.model_id,
+        token_count = excluded.token_count,
+        session_id = excluded.session_id,
+        latency_ms = excluded.latency_ms,
+        is_error = excluded.is_error,
+        metadata = excluded.metadata,
+        cost = excluded.cost,
+        timestamp = excluded.timestamp
+    WHERE token_logs.agent_name = 'codex' AND token_logs.model_id = 'codex'
+";
+
 pub fn get_enabled_agents(conn: &Connection) -> Vec<String> {
     let defaults = AppSettings::default();
     let enabled_str = get_setting(conn, "enabled_agents").unwrap_or(None);
@@ -15,59 +36,62 @@ pub fn get_enabled_agents(conn: &Connection) -> Vec<String> {
     }
 }
 
+fn insert_token_log_chunk(conn: &Connection, logs: &[TokenLog]) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare_cached(INSERT_TOKEN_LOG_SQL)?;
+
+    for log in logs {
+        let token_type_str = serde_json::to_value(&log.token_type)
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "input".to_string());
+
+        stmt.execute(params![
+            log.agent_name,
+            log.provider,
+            log.model_id,
+            token_type_str,
+            log.token_count,
+            log.session_id,
+            log.request_id,
+            log.latency_ms,
+            log.is_error as i32,
+            log.metadata,
+            log.cost,
+            log.timestamp,
+        ])?;
+    }
+
+    Ok(())
+}
+
 /// 批量插入 TokenLog（1000 条分批事务）
 pub fn batch_insert_token_logs(
     conn: &Connection,
     logs: &[TokenLog],
 ) -> Result<(), rusqlite::Error> {
-    const BATCH_SIZE: usize = 1000;
-
     for chunk in logs.chunks(BATCH_SIZE) {
         let tx = conn.unchecked_transaction()?;
-        {
-            let mut stmt = tx.prepare_cached(
-                "INSERT INTO token_logs
-                 (agent_name, provider, model_id, token_type, token_count,
-                  session_id, request_id, latency_ms, is_error, metadata, cost, timestamp)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-                 ON CONFLICT(request_id, token_type) DO UPDATE SET
-                    agent_name = excluded.agent_name,
-                    provider = excluded.provider,
-                    model_id = excluded.model_id,
-                    token_count = excluded.token_count,
-                    session_id = excluded.session_id,
-                    latency_ms = excluded.latency_ms,
-                    is_error = excluded.is_error,
-                    metadata = excluded.metadata,
-                    cost = excluded.cost,
-                    timestamp = excluded.timestamp
-                 WHERE token_logs.agent_name = 'codex' AND token_logs.model_id = 'codex'",
-            )?;
-
-            for log in chunk {
-                let token_type_str = serde_json::to_value(&log.token_type)
-                    .ok()
-                    .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    .unwrap_or_else(|| "input".to_string());
-
-                stmt.execute(params![
-                    log.agent_name,
-                    log.provider,
-                    log.model_id,
-                    token_type_str,
-                    log.token_count,
-                    log.session_id,
-                    log.request_id,
-                    log.latency_ms,
-                    log.is_error as i32,
-                    log.metadata,
-                    log.cost,
-                    log.timestamp,
-                ])?;
-            }
-        }
+        insert_token_log_chunk(&tx, chunk)?;
         tx.commit()?;
     }
+    Ok(())
+}
+
+/// 批量插入 TokenLog 并在同一事务内推进 offset。
+pub fn batch_insert_token_logs_and_update_offset(
+    conn: &Connection,
+    logs: &[TokenLog],
+    file_path: &str,
+    offset: u64,
+) -> Result<(), rusqlite::Error> {
+    let tx = conn.unchecked_transaction()?;
+
+    for chunk in logs.chunks(BATCH_SIZE) {
+        insert_token_log_chunk(&tx, chunk)?;
+    }
+    update_offset(&tx, file_path, offset)?;
+
+    tx.commit()?;
     Ok(())
 }
 
@@ -611,6 +635,32 @@ mod tests {
 
         update_offset(&conn, "/tmp/test.jsonl", 2048).unwrap();
         assert_eq!(get_offset(&conn, "/tmp/test.jsonl").unwrap().unwrap(), 2048);
+    }
+
+    #[test]
+    fn test_batch_insert_and_update_offset_atomic_success() {
+        let conn = setup_db();
+        let logs = vec![make_log(
+            "opencode",
+            "gpt-4.1",
+            TokenType::Input,
+            100,
+            "req-atomic",
+        )];
+
+        batch_insert_token_logs_and_update_offset(&conn, &logs, "sqlite:/tmp/opencode.db", 2500)
+            .unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM token_logs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(
+            get_offset(&conn, "sqlite:/tmp/opencode.db")
+                .unwrap()
+                .unwrap(),
+            2500
+        );
     }
 
     #[test]

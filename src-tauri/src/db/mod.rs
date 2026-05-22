@@ -220,6 +220,13 @@ pub fn open_readonly(db_path: &PathBuf) -> Result<Connection, rusqlite::Error> {
 pub enum WriteRequest {
     /// 批量插入 token logs
     InsertTokenLogs(Vec<TokenLog>),
+    /// 批量插入 token logs，并在同一事务内更新 offset
+    InsertTokenLogsAndUpdateOffset {
+        logs: Vec<TokenLog>,
+        file_path: String,
+        offset: u64,
+        result_tx: mpsc::Sender<Result<(), String>>,
+    },
     /// 清理数据（keep_days 为 None 表示清空全部）
     #[allow(dead_code)]
     ClearData(Option<u32>),
@@ -275,6 +282,54 @@ impl DbManager {
                             log::error!("批量插入失败: {}", e);
                             continue;
                         }
+                        // 入库后查询今日汇总并广播
+                        let enabled_agents = queries::get_enabled_agents(&conn);
+                        match queries::get_token_summary_for_agents(&conn, "today", &enabled_agents)
+                        {
+                            Ok(summary) => {
+                                log::info!(
+                                    "[db] 今日汇总: total={}, input={}, output={}, cache_read={}, cache_create={}, agent_cost=${:.2}",
+                                    summary.total, summary.input, summary.output, summary.cache_read, summary.cache_create, summary.agent_cost
+                                );
+                                emit_token_summary(&app_handle, &conn, &summary);
+                            }
+                            Err(e) => {
+                                log::error!("查询汇总失败: {}", e);
+                            }
+                        }
+                    }
+                    WriteRequest::InsertTokenLogsAndUpdateOffset {
+                        logs,
+                        file_path,
+                        offset,
+                        result_tx,
+                    } => {
+                        let count = logs.len();
+                        let total_tokens: i64 = logs.iter().map(|l| l.token_count).sum();
+                        let total_cost: f64 = logs.iter().filter_map(|l| l.cost).sum();
+                        let agents: Vec<&str> = logs
+                            .iter()
+                            .map(|l| l.agent_name.as_str())
+                            .collect::<std::collections::HashSet<_>>()
+                            .into_iter()
+                            .collect();
+                        log::info!(
+                            "[db] 写入 {} 条记录并更新 offset, agents={:?}, {} tokens, agent_cost=${:.4}",
+                            count,
+                            agents,
+                            total_tokens,
+                            total_cost
+                        );
+                        if let Err(e) = queries::batch_insert_token_logs_and_update_offset(
+                            &conn, &logs, &file_path, offset,
+                        ) {
+                            let message = e.to_string();
+                            log::error!("批量插入并更新 offset 失败: {}", message);
+                            let _ = result_tx.send(Err(message));
+                            continue;
+                        }
+                        let _ = result_tx.send(Ok(()));
+
                         // 入库后查询今日汇总并广播
                         let enabled_agents = queries::get_enabled_agents(&conn);
                         match queries::get_token_summary_for_agents(&conn, "today", &enabled_agents)

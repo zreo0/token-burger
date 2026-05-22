@@ -52,8 +52,8 @@ impl AgentAdapter for OpenCodeAdapter {
     fn query_db(
         &self,
         db_path: &Path,
-        since: Option<i64>,
-    ) -> Result<Vec<TokenLog>, Box<dyn std::error::Error>> {
+        since: Option<u64>,
+    ) -> Result<(Vec<TokenLog>, Option<u64>), Box<dyn std::error::Error>> {
         let conn = rusqlite::Connection::open_with_flags(
             db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -62,8 +62,8 @@ impl AgentAdapter for OpenCodeAdapter {
         let now = chrono::Local::now()
             .format("%Y-%m-%dT%H:%M:%S%:z")
             .to_string();
-        // since 是秒级时间戳，time_created 是毫秒级，需要转换
-        let since_ts = since.unwrap_or(0) * 1000;
+        // OpenCode 的 time_created 是毫秒级，直接作为水位线保存。
+        let since_ts = since.unwrap_or(0).min(i64::MAX as u64) as i64;
 
         let mut stmt = conn.prepare(
             "SELECT id, session_id, data, time_created FROM message
@@ -71,7 +71,6 @@ impl AgentAdapter for OpenCodeAdapter {
              ORDER BY time_created ASC",
         )?;
 
-        let mut logs = Vec::new();
         let rows = stmt.query_map(rusqlite::params![since_ts], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -81,8 +80,15 @@ impl AgentAdapter for OpenCodeAdapter {
             ))
         })?;
 
+        let mut logs = Vec::new();
+        let mut high_watermark = None;
         for row in rows {
             let (msg_id, session_id, data_str, time_created) = row?;
+            if time_created >= 0 {
+                let ts = time_created as u64;
+                high_watermark = Some(high_watermark.map_or(ts, |prev: u64| prev.max(ts)));
+            }
+
             // time_created 是毫秒级时间戳，需要转换为秒
             let ts_str = chrono::DateTime::from_timestamp(time_created / 1000, 0)
                 .map(|dt| {
@@ -164,7 +170,7 @@ impl AgentAdapter for OpenCodeAdapter {
                 }
             }
         }
-        Ok(logs)
+        Ok((logs, high_watermark))
     }
 }
 
@@ -295,5 +301,56 @@ mod tests {
     fn test_empty_content() {
         let adapter = OpenCodeAdapter;
         assert!(adapter.parse_content("").is_empty());
+    }
+
+    #[test]
+    fn test_query_db_uses_millisecond_watermark() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("opencode.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE message (
+                id TEXT NOT NULL,
+                session_id TEXT,
+                data TEXT NOT NULL,
+                time_created INTEGER NOT NULL
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message (id, session_id, data, time_created)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                "old",
+                "session-1",
+                r#"{"role":"assistant","modelID":"gpt-test","providerID":"openai","tokens":{"input":1}}"#,
+                1000i64,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message (id, session_id, data, time_created)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                "new",
+                "session-1",
+                r#"{"role":"assistant","modelID":"gpt-test","providerID":"openai","tokens":{"input":2}}"#,
+                2500i64,
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        let adapter = OpenCodeAdapter;
+        let (logs, high_watermark) = adapter.query_db(&db_path, Some(1000)).unwrap();
+
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].request_id.as_deref(), Some("new-input"));
+        assert_eq!(logs[0].token_count, 2);
+        assert_eq!(high_watermark, Some(2500));
+
+        let (logs, high_watermark) = adapter.query_db(&db_path, Some(2500)).unwrap();
+        assert!(logs.is_empty());
+        assert_eq!(high_watermark, None);
     }
 }

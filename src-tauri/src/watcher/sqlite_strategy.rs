@@ -16,6 +16,7 @@ pub fn run_sqlite_polling(
     write_tx: Sender<WriteRequest>,
     stop_flag: Arc<AtomicBool>,
     poll_interval_secs: u32,
+    initial_offset: Option<u64>,
 ) {
     let adapters = all_adapters();
     let adapter = match adapters.iter().find(|a| a.agent_name() == agent_name) {
@@ -23,7 +24,8 @@ pub fn run_sqlite_polling(
         None => return,
     };
 
-    let mut last_ts: Option<i64> = None;
+    let mut last_offset = initial_offset;
+    let offset_key = super::sqlite_offset_key(&db_path);
 
     loop {
         // 可中断的等待
@@ -43,10 +45,24 @@ pub fn run_sqlite_polling(
             continue;
         }
 
-        match adapter.query_db(&db_path, last_ts) {
-            Ok(logs) if !logs.is_empty() => {
+        match adapter.query_db(&db_path, last_offset) {
+            Ok((logs, high_watermark)) => {
+                let Some(offset) = high_watermark else {
+                    continue;
+                };
+                let has_logs = !logs.is_empty();
                 let total_tokens: i64 = logs.iter().map(|l| l.token_count).sum();
                 let total_cost: f64 = logs.iter().filter_map(|l| l.cost).sum();
+
+                if !has_logs {
+                    last_offset = Some(offset);
+                    let _ = write_tx.send(WriteRequest::UpdateOffset {
+                        file_path: offset_key.clone(),
+                        offset,
+                    });
+                    continue;
+                }
+
                 log::info!(
                     "[sqlite] {}: 轮询获取 {} 条新记录, {} tokens, cost=${:.4}",
                     agent_name,
@@ -54,12 +70,10 @@ pub fn run_sqlite_polling(
                     total_tokens,
                     total_cost
                 );
-                // 用当前时间作为下次轮询起点，避免毫秒精度丢失导致重复查询
-                last_ts = Some(chrono::Local::now().timestamp());
-                let _ = write_tx.send(WriteRequest::InsertTokenLogs(logs));
-            }
-            Ok(_) => {
-                // 无新记录，不打日志
+                if super::insert_logs_and_update_offset(&write_tx, logs, offset_key.clone(), offset)
+                {
+                    last_offset = Some(offset);
+                }
             }
             Err(e) => {
                 log::warn!("{}: SQLite 轮询出错: {}", agent_name, e);

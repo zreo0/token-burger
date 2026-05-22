@@ -53,12 +53,13 @@ pub trait AgentAdapter: Send + Sync {
     fn log_paths(&self) -> Vec<String>;
     /// 解析文本内容（JSONL/JSON），返回统一的 Token 日志集合
     fn parse_content(&self, content: &str) -> Vec<TokenLog>;
-    /// 查询外部 SQLite 数据库，since 为上次查询的时间戳
+    /// 查询外部 SQLite 数据库，since 为上次查询的源数据偏移量。
+    /// 返回日志与本次查询推进到的偏移量。
     fn query_db(
         &self,
         _db_path: &Path,
-        _since: Option<i64>,
-    ) -> Result<Vec<TokenLog>, Box<dyn std::error::Error>> {
+        _since: Option<u64>,
+    ) -> Result<(Vec<TokenLog>, Option<u64>), Box<dyn std::error::Error>> {
         Err("此 Adapter 不支持 SQLite 查询".into())
     }
 }
