@@ -74,9 +74,9 @@ echo ""
 echo "🎉 版本号已同步为 $VERSION"
 echo ""
 CONFIRM=""
-read -r -p "是否自动暂存指定版本文件并提交？输入 yes 确认: " CONFIRM || true
+read -r -p "是否自动暂存指定版本文件并提交？按回车或输入 yes 确认，输入其他内容跳过: " CONFIRM || true
 
-if [ "$CONFIRM" = "yes" ]; then
+if [ -z "$CONFIRM" ] || [ "$CONFIRM" = "yes" ]; then
     VERSION_FILES=(
         "$ROOT_DIR/package.json"
         "$ROOT_DIR/package-lock.json"
