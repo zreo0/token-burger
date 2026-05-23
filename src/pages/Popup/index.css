@@ -84,24 +84,6 @@
     }
 }
 
-.popup-container .cold-start-light {
-    font-size: 11px;
-    color: rgba(34, 34, 34, 0.88);
-    text-align: center;
-    padding: 6px 10px;
-    border-radius: 999px;
-    background: rgba(15, 23, 42, 0.05);
-    align-self: center;
-    font-variant-numeric: tabular-nums;
-}
-
-@media (prefers-color-scheme: dark) {
-    .popup-container .cold-start-light {
-        color: rgba(255, 255, 255, 0.62);
-        background: rgba(255, 255, 255, 0.08);
-    }
-}
-
 .popup-container .top-summary {
     display: flex;
     justify-content: space-between;

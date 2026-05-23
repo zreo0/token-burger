@@ -52,6 +52,10 @@ fn insert_logs_and_update_offset(
     }
 }
 
+fn mark_cold_start_complete(cold_start_complete: &Arc<AtomicBool>) {
+    cold_start_complete.store(true, Ordering::Release);
+}
+
 /// Watcher 配置
 pub struct WatcherConfig {
     pub watch_mode: String,
@@ -73,12 +77,14 @@ impl WatcherEngine {
         app_handle: AppHandle,
         config: WatcherConfig,
         db_path: PathBuf,
+        cold_start_complete: Arc<AtomicBool>,
     ) -> Self {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let flag = stop_flag.clone();
 
         let handle = thread::spawn(move || {
             // 阶段一：冷启动——解析历史数据
+            cold_start_complete.store(false, Ordering::Release);
             let mut known_offsets = offset::load_offsets_from_db(&db_path);
             let total = adapters.len() as u32;
             log::info!(target: "token_burger::watcher", "冷启动开始: {} 个 adapter, 已知 {} 个文件 offset", total, known_offsets.len());
@@ -107,6 +113,11 @@ impl WatcherEngine {
                 );
             }
 
+            mark_cold_start_complete(&cold_start_complete);
+            match crate::db::open_readonly(&db_path) {
+                Ok(conn) => crate::db::query_and_emit_today_summary(&app_handle, &conn),
+                Err(e) => log::error!("冷启动完成后刷新汇总失败: {}", e),
+            }
             log::info!(target: "token_burger::watcher", "冷启动完成");
 
             // 阶段二：正常监听模式
@@ -420,6 +431,15 @@ mod tests {
         assert!(!flag.load(Ordering::Relaxed));
         flag.store(true, Ordering::Relaxed);
         assert!(flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_mark_cold_start_complete() {
+        let complete = Arc::new(AtomicBool::new(false));
+
+        assert!(!complete.load(Ordering::Acquire));
+        mark_cold_start_complete(&complete);
+        assert!(complete.load(Ordering::Acquire));
     }
 
     // --- offset 断点续传 ---

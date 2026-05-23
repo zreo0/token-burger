@@ -1,5 +1,8 @@
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
 use tauri::{
     menu::{Menu, MenuBuilder, MenuItemBuilder},
@@ -23,6 +26,7 @@ pub struct AppState {
     pub watcher: Mutex<Option<watcher::WatcherEngine>>,
     pub write_tx: Mutex<std::sync::mpsc::Sender<db::WriteRequest>>,
     pub account_usage: AccountUsageManager,
+    pub cold_start_complete: Arc<AtomicBool>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -53,6 +57,28 @@ pub fn tray_menu_labels(language: &str) -> (&'static str, &'static str) {
     } else {
         ("Settings", "Quit")
     }
+}
+
+pub fn main_tray_scanning_title(language: &str) -> &'static str {
+    if language == "zh-CN" {
+        "扫描中..."
+    } else {
+        "Scanning..."
+    }
+}
+
+pub fn main_tray_token_title(language: &str, total: i64, cold_start_complete: bool) -> String {
+    if cold_start_complete {
+        format_token_count(total)
+    } else {
+        main_tray_scanning_title(language).to_string()
+    }
+}
+
+pub(crate) fn is_cold_start_complete(app: &AppHandle) -> bool {
+    app.try_state::<AppState>()
+        .map(|state| state.cold_start_complete.load(Ordering::Acquire))
+        .unwrap_or(true)
 }
 
 pub fn build_tray_menu(app: &AppHandle, language: &str) -> tauri::Result<Menu<tauri::Wry>> {
@@ -141,6 +167,7 @@ fn restart_watcher(state: &AppState) {
     let write_tx = state.write_tx.lock().unwrap().clone();
     let new_watcher =
         watcher::WatcherEngine::start_monitoring(active_adapters, write_tx, config, db_path_buf);
+    state.cold_start_complete.store(true, Ordering::Release);
 
     *watcher_guard = Some(new_watcher);
 }
@@ -293,6 +320,7 @@ pub fn update_settings(
 
     if key == "language" {
         update_tray_menu_language(&app, &value)?;
+        sync_account_usage_tray_items(&app);
         let _ = app.emit("settings-language-changed", &value);
     }
 
@@ -495,5 +523,19 @@ mod tests {
         assert_eq!(format_token_count(1_500_000), "1.5M");
         assert_eq!(format_token_count(1_500_000_000), "1.5B");
         assert_eq!(format_token_count(0), "0");
+    }
+
+    #[test]
+    fn test_main_tray_scanning_title_uses_language() {
+        assert_eq!(main_tray_scanning_title("en"), "Scanning...");
+        assert_eq!(main_tray_scanning_title("zh-CN"), "扫描中...");
+        assert_eq!(main_tray_scanning_title("fr"), "Scanning...");
+    }
+
+    #[test]
+    fn test_main_tray_token_title_respects_cold_start_state() {
+        assert_eq!(main_tray_token_title("en", 45678, false), "Scanning...");
+        assert_eq!(main_tray_token_title("zh-CN", 45678, false), "扫描中...");
+        assert_eq!(main_tray_token_title("en", 45678, true), "45.7K");
     }
 }

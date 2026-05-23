@@ -11,7 +11,7 @@ import { formatTokenCount, formatCost } from '../../utils/format';
 import { calculateTotalCost } from '../../utils/pricing';
 import { getPlatformInfo } from '../../utils/platform';
 import { DEFAULT_THEME_ID } from '../../components/Burger/themes';
-import type { AppSettings, ColdStartProgress, PricingTable, TimeRange, TokenBreakdown } from '../../types';
+import type { AppSettings, PricingTable, TimeRange, TokenBreakdown } from '../../types';
 import './index.css';
 
 const TIME_RANGES: { key: TimeRange; labelKey: string }[] = [
@@ -53,7 +53,6 @@ export function Popup() {
     const { t } = useTranslation();
     const { summary, loading, error, refresh, range, setRange } = useToken();
     const { snapshots, providers } = useAccountUsageContext();
-    const [coldStart, setColdStart] = useState<ColdStartProgress | null>(null);
     const [pricing, setPricing] = useState<PricingTable>({});
     const [pricingReady, setPricingReady] = useState(false);
     const [colorTheme, setColorTheme] = useState(DEFAULT_THEME_ID);
@@ -86,24 +85,11 @@ export function Popup() {
     }, []);
 
     useEffect(() => {
-        const unlisten = listen<ColdStartProgress>('cold-start-progress', (event) => {
-            const progress = event.payload;
-
-            if (progress.completed >= progress.total) {
-                setColdStart(null);
-
-                return;
-            }
-
-            setColdStart(progress);
-        });
-
         const unlistenTheme = listen<string>('settings-color-theme-changed', (event) => {
             setColorTheme(event.payload);
         });
 
         return () => {
-            unlisten.then((fn) => fn());
             unlistenTheme.then((fn) => fn());
         };
     }, []);
@@ -126,7 +112,7 @@ export function Popup() {
         });
 
         return () => window.cancelAnimationFrame(frame);
-    }, [hasAccountUsage, snapshots.length, providers.length, topModels.length, coldStart, isSummaryLoading, isCostLoading]);
+    }, [hasAccountUsage, snapshots.length, providers.length, topModels.length, isSummaryLoading, isCostLoading]);
 
     if (error) {
         return (
@@ -183,12 +169,6 @@ export function Popup() {
 
             {/* Account Usage */}
             <AccountUsageCard />
-
-            {coldStart && (
-                <div className="cold-start-light">
-                    {t('popup.coldStart', { agent: coldStart.agent })} ({coldStart.completed}/{coldStart.total})
-                </div>
-            )}
         </div>
     );
 }

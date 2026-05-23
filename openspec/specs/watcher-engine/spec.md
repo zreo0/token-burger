@@ -74,7 +74,7 @@ WatcherEngine SHALL 作为单独的后台线程运行，接收所有已启用 Ad
 - **THEN** 系统从 10240 开始增量读取
 
 ### Requirement: 冷启动编排
-系统首次启动时 SHALL 进入冷启动模式：逐 Agent 在后台线程解析历史日志，按 mtime 过滤最近 N 天（默认 30 天，可配置）的文件。每完成一个 Agent MUST 通过 `emit("cold-start-progress", ...)` 广播进度。全部完成后切换到正常监听模式。
+系统首次启动时 SHALL 进入冷启动模式：逐 Agent 在后台线程解析历史日志，按 mtime 过滤最近 N 天（默认 30 天，可配置）的文件。每完成一个 Agent MUST 通过 `emit("cold-start-progress", ...)` 广播进度。系统 MUST 维护可靠的冷启动完成状态；全部完成后 MUST 标记冷启动完成，并切换到正常监听模式。
 
 #### Scenario: 冷启动进度广播
 - **WHEN** 冷启动完成 Claude Code 的历史解析
@@ -86,7 +86,15 @@ WatcherEngine SHALL 作为单独的后台线程运行，接收所有已启用 Ad
 
 #### Scenario: 增量可用
 - **WHEN** Claude Code 冷启动完成但 Codex 尚未开始
-- **THEN** 前端已可展示 Claude Code 的数据
+- **THEN** 数据可以入库并参与后续汇总，但主托盘 token title 不得把该部分数据展示为最终完成状态
+
+#### Scenario: 冷启动完成状态
+- **WHEN** 所有启用 Agent 的冷启动解析都已完成
+- **THEN** 系统标记冷启动完成，并允许主托盘恢复正常 token 汇总展示与 Popup 打开行为
+
+#### Scenario: 无启用 Agent
+- **WHEN** 冷启动开始时没有任何启用 Agent 需要扫描
+- **THEN** 系统立即标记冷启动完成，并进入正常监听模式
 
 ### Requirement: 事件广播
 每次入库完成后，写线程 SHALL 查询当日 token 汇总，通过 `app.emit("token-updated", summary)` 广播给前端，并更新 tray title。

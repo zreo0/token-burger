@@ -8,6 +8,8 @@ mod tray_usage;
 mod types;
 mod watcher;
 
+use std::sync::{atomic::AtomicBool, Arc};
+
 use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, LogicalPosition, LogicalSize, Manager, Rect, Runtime, WebviewUrl, WebviewWindow,
@@ -227,6 +229,7 @@ pub fn run() {
 
             // 注册共享状态
             let db_path_str = db_path.to_string_lossy().to_string();
+            let cold_start_complete = Arc::new(AtomicBool::new(false));
 
             // 启动写入线程
             let db_manager = db::DbManager::start(db_path.clone(), app.handle().clone());
@@ -251,6 +254,7 @@ pub fn run() {
                 app.handle().clone(),
                 watcher_config,
                 db_path.clone(),
+                cold_start_complete.clone(),
             );
 
             app.manage(commands::AppState {
@@ -259,6 +263,7 @@ pub fn run() {
                 watcher: std::sync::Mutex::new(Some(watcher_engine)),
                 write_tx: std::sync::Mutex::new(write_tx_for_state),
                 account_usage: account_usage_manager,
+                cold_start_complete: cold_start_complete.clone(),
             });
 
             // 使用编译时嵌入的图标，Windows 使用白色版本以适配深色任务栏
@@ -274,7 +279,7 @@ pub fn run() {
             let _tray = TrayIconBuilder::with_id("main")
                 .icon(icon)
                 .icon_as_template(true)
-                .title("0")
+                .title(commands::main_tray_scanning_title(&language))
                 .tooltip("TokenBurger")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
@@ -315,6 +320,9 @@ pub fn run() {
                     } = event
                     {
                         let app = tray.app_handle();
+                        if !commands::is_cold_start_complete(app) {
+                            return;
+                        }
                         toggle_popup_window(app, &rect);
                     }
                 })

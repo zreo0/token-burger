@@ -126,7 +126,14 @@ fn duration_until_next_local_day(now: chrono::DateTime<chrono::Local>) -> std::t
 
 pub(crate) fn update_main_tray_title(app_handle: &AppHandle, conn: &Connection, total: i64) {
     if let Some(tray) = app_handle.tray_by_id("main") {
-        let token_title = crate::commands::format_token_count(total);
+        let language = queries::get_setting(conn, "language")
+            .unwrap_or(None)
+            .unwrap_or_else(|| crate::types::AppSettings::default().language);
+        let token_title = crate::commands::main_tray_token_title(
+            &language,
+            total,
+            crate::commands::is_cold_start_complete(app_handle),
+        );
         update_main_tray_usage_title(&tray, conn, token_title);
     }
 }
