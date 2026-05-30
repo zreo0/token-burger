@@ -41,6 +41,7 @@ vi.mock('../../../context/AccountUsageContext', () => ({
     useAccountUsageContext: () => ({
         snapshots: [],
         providers: [],
+        reload: vi.fn(),
     }),
 }));
 

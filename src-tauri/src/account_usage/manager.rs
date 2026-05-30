@@ -23,6 +23,12 @@ pub struct AccountUsageManager {
     refresh_timeout: Duration,
 }
 
+/// Provider 刷新结果，区分退避缓存和真实拉取结果
+enum ProviderRefreshResult {
+    Cached(Vec<AccountUsageSnapshot>),
+    Fetched(AccountUsageResult),
+}
+
 impl AccountUsageManager {
     pub fn new(db_path: PathBuf) -> Self {
         let providers = providers::all_providers()
@@ -81,18 +87,46 @@ impl AccountUsageManager {
             .collect::<HashMap<_, _>>();
         drop(conn);
 
-        let mut snapshots = Vec::new();
-        for provider in &self.providers {
-            if state_map
-                .get(provider.id())
-                .map(|state| state.enabled)
-                .unwrap_or(false)
-            {
-                match self.refresh_provider(provider.id()) {
-                    Ok(provider_snapshots) => snapshots.extend(provider_snapshots),
-                    Err(error) => {
-                        log::warn!("账号用量 Provider 刷新失败: {}: {}", provider.id(), error);
+        let provider_ids = self
+            .providers
+            .iter()
+            .filter(|provider| {
+                state_map
+                    .get(provider.id())
+                    .map(|state| state.enabled)
+                    .unwrap_or(false)
+            })
+            .map(|provider| provider.id().to_string())
+            .collect::<Vec<_>>();
+        let results = std::thread::scope(|scope| {
+            let handles = provider_ids
+                .into_iter()
+                .map(|provider_id| {
+                    let handle_provider_id = provider_id.clone();
+                    let handle = scope.spawn(move || self.fetch_provider_usage(&provider_id));
+                    (handle_provider_id, handle)
+                })
+                .collect::<Vec<_>>();
+
+            handles
+                .into_iter()
+                .filter_map(|(provider_id, handle)| match handle.join() {
+                    Ok(result) => Some((provider_id, result)),
+                    Err(_) => {
+                        log::warn!("账号用量 Provider 刷新线程崩溃: {}", provider_id);
+                        None
                     }
+                })
+                .collect::<Vec<_>>()
+        });
+        let mut snapshots = Vec::new();
+        for (provider_id, result) in results {
+            match result.and_then(|refresh_result| {
+                self.store_provider_refresh_result(&provider_id, refresh_result)
+            }) {
+                Ok(provider_snapshots) => snapshots.extend(provider_snapshots),
+                Err(error) => {
+                    log::warn!("账号用量 Provider 刷新失败: {}: {}", provider_id, error);
                 }
             }
         }
@@ -100,6 +134,12 @@ impl AccountUsageManager {
     }
 
     pub fn refresh_provider(&self, provider_id: &str) -> Result<Vec<AccountUsageSnapshot>, String> {
+        let result = self.fetch_provider_usage(provider_id)?;
+        self.store_provider_refresh_result(provider_id, result)
+    }
+
+    /// 拉取单个 Provider 的最新用量，但不在并行阶段写数据库
+    fn fetch_provider_usage(&self, provider_id: &str) -> Result<ProviderRefreshResult, String> {
         let provider = self
             .providers
             .iter()
@@ -108,7 +148,7 @@ impl AccountUsageManager {
             .ok_or_else(|| format!("未知账号用量 Provider: {provider_id}"))?;
 
         if let Some(snapshots) = self.rate_limit_backoff_snapshots(provider_id)? {
-            return Ok(snapshots);
+            return Ok(ProviderRefreshResult::Cached(snapshots));
         }
 
         let guard = self.try_refresh_guard(provider_id)?;
@@ -119,8 +159,18 @@ impl AccountUsageManager {
         let result = self.refresh_with_timeout(provider, context);
         drop(guard);
 
+        Ok(ProviderRefreshResult::Fetched(result))
+    }
+
+    /// 顺序写入 Provider 刷新结果，避免多个线程同时写 SQLite
+    fn store_provider_refresh_result(
+        &self,
+        provider_id: &str,
+        result: ProviderRefreshResult,
+    ) -> Result<Vec<AccountUsageSnapshot>, String> {
         match result {
-            Ok(snapshots) => {
+            ProviderRefreshResult::Cached(snapshots) => Ok(snapshots),
+            ProviderRefreshResult::Fetched(Ok(snapshots)) => {
                 let conn = Connection::open(&self.db_path).map_err(|error| error.to_string())?;
                 for snapshot in &snapshots {
                     crate::account_usage::store::upsert_snapshot(&conn, snapshot)
@@ -130,7 +180,9 @@ impl AccountUsageManager {
                     .map_err(|error| error.to_string())?;
                 Ok(snapshots)
             }
-            Err(error) => self.handle_refresh_error(provider_id, error),
+            ProviderRefreshResult::Fetched(Err(error)) => {
+                self.handle_refresh_error(provider_id, error)
+            }
         }
     }
 

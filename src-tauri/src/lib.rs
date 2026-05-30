@@ -12,7 +12,8 @@ use std::sync::{atomic::AtomicBool, Arc};
 
 use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, LogicalPosition, LogicalSize, Manager, Rect, Runtime, WebviewUrl, WebviewWindow,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Runtime, WebviewUrl,
+    WebviewWindow,
 };
 
 const POPUP_WINDOW_LABEL: &str = "popup";
@@ -130,6 +131,7 @@ pub(crate) fn toggle_popup_window<R: Runtime>(app: &AppHandle<R>, rect: &Rect) {
 fn show_popup<R: Runtime>(window: &WebviewWindow<R>) {
     let _ = window.show();
     let _ = window.set_focus();
+    let _ = window.emit("popup-shown", ());
 }
 
 #[tauri::command]

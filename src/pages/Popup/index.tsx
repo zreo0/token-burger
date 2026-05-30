@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -52,11 +52,12 @@ export function getPopupWindowHeight(hasAccountUsage: boolean, contentHeight: nu
 export function Popup() {
     const { t } = useTranslation();
     const { summary, loading, error, refresh, range, setRange } = useToken();
-    const { snapshots, providers } = useAccountUsageContext();
+    const { snapshots, providers, reload: reloadAccountUsage } = useAccountUsageContext();
     const [pricing, setPricing] = useState<PricingTable>({});
     const [pricingReady, setPricingReady] = useState(false);
     const [colorTheme, setColorTheme] = useState(DEFAULT_THEME_ID);
     const [isWindows, setIsWindows] = useState(false);
+    const containerRef = useRef<HTMLDivElement | null>(null);
     const lastPopupHeight = useRef<number | null>(null);
 
     useLayoutEffect(() => {
@@ -100,19 +101,59 @@ export function Popup() {
     const topModels = getTopModels(summary?.by_model);
     const enabledProviderIds = new Set(providers.filter(provider => provider.enabled).map(provider => provider.id));
     const hasAccountUsage = enabledProviderIds.size > 0 || snapshots.some(snapshot => enabledProviderIds.has(snapshot.provider_id));
+    const resizeToContent = useCallback(() => {
+        const height = getPopupWindowHeight(
+            hasAccountUsage,
+            containerRef.current?.scrollHeight ?? POPUP_BASE_HEIGHT,
+        );
 
-    useLayoutEffect(() => {
-        const frame = window.requestAnimationFrame(() => {
-            const container = document.querySelector<HTMLElement>('.popup-container');
-            const height = getPopupWindowHeight(hasAccountUsage, container?.scrollHeight ?? POPUP_BASE_HEIGHT);
+        if (lastPopupHeight.current === height) return;
+        lastPopupHeight.current = height;
+        invoke('resize_popup_window', { height }).catch(() => {});
+    }, [hasAccountUsage]);
 
-            if (lastPopupHeight.current === height) return;
-            lastPopupHeight.current = height;
-            invoke('resize_popup_window', { height }).catch(() => {});
+    useEffect(() => {
+        const unlistenPopupShown = listen('popup-shown', () => {
+            lastPopupHeight.current = null;
+            window.requestAnimationFrame(() => {
+                resizeToContent();
+                window.setTimeout(resizeToContent, 0);
+            });
+            void refresh();
+            void reloadAccountUsage();
         });
 
-        return () => window.cancelAnimationFrame(frame);
-    }, [hasAccountUsage, snapshots.length, providers.length, topModels.length, isSummaryLoading, isCostLoading]);
+        return () => {
+            unlistenPopupShown.then((fn) => fn());
+        };
+    }, [refresh, reloadAccountUsage, resizeToContent]);
+
+    useLayoutEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+
+        let frame: number | null = null;
+        const queueResize = () => {
+            if (frame !== null) {
+                window.cancelAnimationFrame(frame);
+            }
+            frame = window.requestAnimationFrame(() => {
+                frame = null;
+                resizeToContent();
+            });
+        };
+
+        queueResize();
+        const observer = new ResizeObserver(queueResize);
+        observer.observe(container);
+
+        return () => {
+            if (frame !== null) {
+                window.cancelAnimationFrame(frame);
+            }
+            observer.disconnect();
+        };
+    }, [resizeToContent, snapshots.length, providers.length, topModels.length, isSummaryLoading, isCostLoading]);
 
     if (error) {
         return (
@@ -124,7 +165,7 @@ export function Popup() {
     }
 
     return (
-        <div className={`popup-container${isWindows ? ' windows' : ''}`}>
+        <div ref={containerRef} className={`popup-container${isWindows ? ' windows' : ''}`}>
             {/* 时间范围选择器 */}
             <div className="segmented-control">
                 {TIME_RANGES.map(({ key, labelKey }) => (
