@@ -1,8 +1,11 @@
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
+    mpsc::{self, Receiver, Sender},
     Arc, Mutex,
 };
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use tauri::{
     menu::{Menu, MenuBuilder, MenuItemBuilder},
@@ -19,6 +22,9 @@ use crate::db;
 use crate::types::{AgentInfo, AppSettings, PlatformInfo, PricingTable, TokenSummary};
 use crate::watcher;
 
+const ACCOUNT_USAGE_IDLE_POLL_SECS: u64 = 30;
+const ACCOUNT_USAGE_SLEEP_SLICE_MS: u64 = 500;
+
 /// Tauri 共享状态
 pub struct AppState {
     pub db_path: String,
@@ -26,7 +32,70 @@ pub struct AppState {
     pub watcher: Mutex<Option<watcher::WatcherEngine>>,
     pub write_tx: Mutex<std::sync::mpsc::Sender<db::WriteRequest>>,
     pub account_usage: AccountUsageManager,
+    pub(crate) account_usage_refresher: Mutex<Option<AccountUsageRefreshWorker>>,
     pub cold_start_complete: Arc<AtomicBool>,
+}
+
+/// 账号用量后台刷新线程
+pub(crate) struct AccountUsageRefreshWorker {
+    stop_flag: Arc<AtomicBool>,
+    wake_tx: Sender<()>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl AccountUsageRefreshWorker {
+    /// 启动后台刷新线程，按启用 Provider 的最短间隔刷新
+    fn start(app: AppHandle) -> Self {
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let (wake_tx, wake_rx) = mpsc::channel();
+        let thread_stop_flag = stop_flag.clone();
+        let handle = thread::spawn(move || loop {
+            if thread_stop_flag.load(Ordering::Relaxed) {
+                return;
+            }
+
+            let interval = match account_usage_refresh_interval(&app) {
+                Some(interval) => interval,
+                None => {
+                    if wait_for_account_usage_signal(
+                        &thread_stop_flag,
+                        &wake_rx,
+                        Duration::from_secs(ACCOUNT_USAGE_IDLE_POLL_SECS),
+                    ) {
+                        return;
+                    }
+                    continue;
+                }
+            };
+
+            refresh_account_usage_from_background(&app);
+
+            if wait_for_account_usage_signal(&thread_stop_flag, &wake_rx, interval) {
+                return;
+            }
+        });
+
+        Self {
+            stop_flag,
+            wake_tx,
+            handle: Some(handle),
+        }
+    }
+
+    /// 唤醒后台线程，使其重新读取 Provider 刷新间隔
+    fn wake(&self) {
+        let _ = self.wake_tx.send(());
+    }
+}
+
+impl Drop for AccountUsageRefreshWorker {
+    fn drop(&mut self) {
+        self.stop_flag.store(true, Ordering::Relaxed);
+        let _ = self.wake_tx.send(());
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -91,6 +160,86 @@ pub fn build_tray_menu(app: &AppHandle, language: &str) -> tauri::Result<Menu<ta
         .separator()
         .item(&quit_item)
         .build()
+}
+
+/// 启动账号用量后台刷新线程
+pub(crate) fn start_account_usage_refresher(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let mut refresher = state.account_usage_refresher.lock().unwrap();
+    if refresher.is_some() {
+        return;
+    }
+
+    *refresher = Some(AccountUsageRefreshWorker::start(app.clone()));
+}
+
+/// 唤醒账号用量后台刷新线程，刷新 Provider 状态变更后的调度
+fn wake_account_usage_refresher(state: &AppState) {
+    if let Ok(refresher) = state.account_usage_refresher.lock() {
+        if let Some(refresher) = refresher.as_ref() {
+            refresher.wake();
+        }
+    }
+}
+
+/// 等待后台刷新下一轮执行，等待期间可响应停止或唤醒信号
+fn wait_for_account_usage_signal(
+    stop_flag: &Arc<AtomicBool>,
+    wake_rx: &Receiver<()>,
+    duration: Duration,
+) -> bool {
+    let deadline = Instant::now() + duration;
+    while Instant::now() < deadline {
+        if stop_flag.load(Ordering::Relaxed) {
+            return true;
+        }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match wake_rx
+            .recv_timeout(remaining.min(Duration::from_millis(ACCOUNT_USAGE_SLEEP_SLICE_MS)))
+        {
+            Ok(()) => return false,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return true,
+        }
+    }
+
+    stop_flag.load(Ordering::Relaxed)
+}
+
+/// 读取当前启用 Provider 的最短刷新间隔
+fn account_usage_refresh_interval(app: &AppHandle) -> Option<Duration> {
+    let state = app.try_state::<AppState>()?;
+    match state.account_usage.enabled_refresh_interval_secs() {
+        Ok(Some(interval)) => Some(Duration::from_secs(interval)),
+        Ok(None) => None,
+        Err(error) => {
+            log::warn!("读取账号用量后台刷新间隔失败: {}", error);
+            None
+        }
+    }
+}
+
+/// 后台刷新账号用量，并广播给前端与菜单栏
+fn refresh_account_usage_from_background(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+
+    if let Err(error) = refresh_account_usage_and_emit(app, &state) {
+        log::warn!("账号用量后台刷新失败: {}", error);
+    }
+}
+
+/// 执行账号用量刷新，统一处理事件广播和菜单栏同步
+fn refresh_account_usage_and_emit(
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<Vec<AccountUsageSnapshot>, String> {
+    let snapshots = redact_account_usage_snapshots(state.account_usage.refresh_all_enabled()?);
+    let _ = app.emit("account-usage-updated", &snapshots);
+    sync_account_usage_tray_items(app);
+    Ok(snapshots)
 }
 
 fn update_tray_menu_language(app: &AppHandle, language: &str) -> Result<(), String> {
@@ -391,10 +540,7 @@ pub fn refresh_account_usage_all(
     app: AppHandle,
     state: State<AppState>,
 ) -> Result<Vec<AccountUsageSnapshot>, String> {
-    let snapshots = redact_account_usage_snapshots(state.account_usage.refresh_all_enabled()?);
-    let _ = app.emit("account-usage-updated", &snapshots);
-    sync_account_usage_tray_items(&app);
-    Ok(snapshots)
+    refresh_account_usage_and_emit(&app, &state)
 }
 
 #[tauri::command]
@@ -480,6 +626,7 @@ pub fn set_account_usage_provider_enabled(
         let _ = app.emit("account-usage-providers-updated", &providers);
     }
     sync_account_usage_tray_items(&app);
+    wake_account_usage_refresher(&state);
     Ok(provider_state)
 }
 

@@ -77,6 +77,19 @@ impl AccountUsageManager {
         crate::account_usage::store::latest_snapshots(&conn).map_err(|error| error.to_string())
     }
 
+    /// 返回启用 Provider 的最短刷新间隔秒数
+    pub fn enabled_refresh_interval_secs(&self) -> Result<Option<u64>, String> {
+        let conn = Connection::open(&self.db_path).map_err(|error| error.to_string())?;
+        let interval = crate::account_usage::store::list_provider_states(&conn)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .filter(|state| state.enabled && state.refresh_interval_secs > 0)
+            .map(|state| state.refresh_interval_secs)
+            .min();
+
+        Ok(interval)
+    }
+
     pub fn refresh_all_enabled(&self) -> Result<Vec<AccountUsageSnapshot>, String> {
         let conn = Connection::open(&self.db_path).map_err(|error| error.to_string())?;
         let states = crate::account_usage::store::list_provider_states(&conn)
@@ -151,7 +164,20 @@ impl AccountUsageManager {
             return Ok(ProviderRefreshResult::Cached(snapshots));
         }
 
-        let guard = self.try_refresh_guard(provider_id)?;
+        let guard = match self.try_refresh_guard(provider_id) {
+            Ok(guard) => guard,
+            Err(error) => {
+                // 后台刷新和手动刷新可能同时触发，已有缓存时直接复用，避免前端出现短暂错误
+                let conn = Connection::open(&self.db_path).map_err(|error| error.to_string())?;
+                let snapshots =
+                    crate::account_usage::store::latest_snapshots_by_provider(&conn, provider_id)
+                        .map_err(|error| error.to_string())?;
+                if snapshots.is_empty() {
+                    return Err(error);
+                }
+                return Ok(ProviderRefreshResult::Cached(snapshots));
+            }
+        };
         let context = AccountUsageRefreshContext {
             db_path: self.db_path.clone(),
             credentials: self.credentials.clone(),
@@ -509,6 +535,38 @@ mod tests {
         assert!(manager.try_refresh_guard("codex").is_err());
         drop(guard);
         assert!(manager.try_refresh_guard("codex").is_ok());
+    }
+
+    #[test]
+    fn test_refresh_provider_reuses_cache_when_refresh_is_running() {
+        let (_temp, manager) = setup_manager();
+        let conn = Connection::open(&manager.db_path).unwrap();
+        crate::account_usage::store::upsert_snapshot(&conn, &sample_snapshot("codex")).unwrap();
+        drop(conn);
+        let _guard = manager.try_refresh_guard("codex").unwrap();
+
+        let snapshots = manager.refresh_provider("codex").unwrap();
+
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].provider_id, "codex");
+    }
+
+    #[test]
+    fn test_enabled_refresh_interval_uses_shortest_enabled_provider() {
+        let (_temp, manager) = setup_manager();
+        assert_eq!(manager.enabled_refresh_interval_secs().unwrap(), None);
+
+        manager
+            .set_provider_enabled("codex".to_string(), true, Some(300))
+            .unwrap();
+        manager
+            .set_provider_enabled("claude-code".to_string(), true, Some(60))
+            .unwrap();
+        manager
+            .set_provider_enabled("github-copilot".to_string(), false, Some(10))
+            .unwrap();
+
+        assert_eq!(manager.enabled_refresh_interval_secs().unwrap(), Some(60));
     }
 
     #[test]

@@ -29,25 +29,8 @@ export function filterSnapshotsByEnabledProviders(
     return snapshots.filter(snapshot => enabledProviderIds.has(snapshot.provider_id));
 }
 
-export function getAccountUsageRefreshIntervalMs(providers: AccountUsageProviderInfo[]): number | null {
-    const intervals = providers
-        .filter(provider => provider.enabled)
-        .map(provider => provider.refresh_interval_secs || provider.default_refresh_interval_secs)
-        .filter(interval => Number.isFinite(interval) && interval > 0);
-
-    if (intervals.length === 0) return null;
-
-    return Math.min(...intervals) * 1000;
-}
-
 async function refreshEnabledProviders() {
     return await invoke<AccountUsageSnapshot[]>('refresh_account_usage_all');
-}
-
-function runAfterFirstPaint(callback: () => void) {
-    window.requestAnimationFrame(() => {
-        window.setTimeout(callback, 0);
-    });
 }
 
 export function useAccountUsage() {
@@ -67,18 +50,6 @@ export function useAccountUsage() {
             ]);
             setProviders(fetchedProviders);
             setSnapshots(filterSnapshotsByEnabledProviders(fetchedSnapshots, fetchedProviders));
-            if (fetchedProviders.some(provider => provider.enabled)) {
-                runAfterFirstPaint(() => {
-                    setRefreshing(true);
-                    refreshEnabledProviders()
-                        .then((newSnapshots) => {
-                            setSnapshots(prev => mergeAccountUsageSnapshots(prev, newSnapshots));
-                            setProviderErrors({});
-                        })
-                        .catch((err) => console.error('Failed to refresh enabled account usage providers:', err))
-                        .finally(() => setRefreshing(false));
-                });
-            }
         } catch (err) {
             console.error('Failed to load account usage data:', err);
         } finally {
@@ -108,24 +79,6 @@ export function useAccountUsage() {
             if (unlistenProviders) unlistenProviders();
         };
     }, [loadData]);
-
-    useEffect(() => {
-        const intervalMs = getAccountUsageRefreshIntervalMs(providers);
-        if (!intervalMs) return;
-
-        const timer = window.setInterval(() => {
-            setRefreshing(true);
-            refreshEnabledProviders()
-                .then((newSnapshots) => {
-                    setSnapshots(prev => mergeAccountUsageSnapshots(prev, newSnapshots));
-                    setProviderErrors({});
-                })
-                .catch((err) => console.error('Failed to auto-refresh enabled account usage providers:', err))
-                .finally(() => setRefreshing(false));
-        }, intervalMs);
-
-        return () => window.clearInterval(timer);
-    }, [providers]);
 
     const refreshAll = async () => {
         setRefreshing(true);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterSnapshotsByEnabledProviders, getAccountUsageRefreshIntervalMs, mergeAccountUsageSnapshots } from '../useAccountUsage';
+import { filterSnapshotsByEnabledProviders, mergeAccountUsageSnapshots } from '../useAccountUsage';
 import type { AccountUsageProviderInfo, AccountUsageSnapshot } from '../../types';
 
 function snapshot(providerId: string, accountKey = 'default'): AccountUsageSnapshot {
@@ -43,20 +43,6 @@ describe('mergeAccountUsageSnapshots', () => {
             'github-copilot:default',
             'codex:new',
         ]);
-    });
-});
-
-describe('getAccountUsageRefreshIntervalMs', () => {
-    it('使用已启用 Provider 的最短配置刷新间隔', () => {
-        expect(getAccountUsageRefreshIntervalMs([
-            provider('codex', true),
-            { ...provider('github-copilot', true), refresh_interval_secs: 120 },
-            { ...provider('cursor', false), refresh_interval_secs: 30 },
-        ])).toBe(120000);
-    });
-
-    it('无启用 Provider 时不设置自动刷新', () => {
-        expect(getAccountUsageRefreshIntervalMs([provider('codex', false)])).toBeNull();
     });
 });
 

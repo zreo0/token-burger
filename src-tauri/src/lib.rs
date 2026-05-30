@@ -265,8 +265,10 @@ pub fn run() {
                 watcher: std::sync::Mutex::new(Some(watcher_engine)),
                 write_tx: std::sync::Mutex::new(write_tx_for_state),
                 account_usage: account_usage_manager,
+                account_usage_refresher: std::sync::Mutex::new(None),
                 cold_start_complete: cold_start_complete.clone(),
             });
+            commands::start_account_usage_refresher(app.handle());
 
             // 使用编译时嵌入的图标，Windows 使用白色版本以适配深色任务栏
             #[cfg(target_os = "windows")]
