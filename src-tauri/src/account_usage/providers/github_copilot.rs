@@ -19,6 +19,13 @@ const GITHUB_EMAILS_URL: &str = "https://api.github.com/user/emails";
 const EDITOR_PLUGIN_VERSION: &str = "GitHubCopilotChat/0.26.7";
 const EDITOR_VERSION: &str = "vscode/1.96.2";
 const GITHUB_API_VERSION: &str = "2025-04-01";
+const GH_COMMAND_CANDIDATES: &[&str] = &[
+    "gh",
+    "/opt/homebrew/bin/gh",
+    "/usr/local/bin/gh",
+    "/opt/local/bin/gh",
+    "/usr/bin/gh",
+];
 
 pub struct GithubCopilotUsageProvider;
 
@@ -395,7 +402,13 @@ fn discover_developer_token() -> Option<String> {
 }
 
 fn run_gh_auth_token() -> Option<String> {
-    let output = Command::new("gh")
+    GH_COMMAND_CANDIDATES
+        .iter()
+        .find_map(|command| run_gh_auth_token_with_command(command))
+}
+
+fn run_gh_auth_token_with_command(command: &str) -> Option<String> {
+    let output = Command::new(command)
         .args(["auth", "token", "--hostname", "github.com"])
         .output()
         .ok()?;
@@ -555,5 +568,12 @@ mod tests {
             read_token_from_hosts_file(path).as_deref(),
             Some("gho_test")
         );
+    }
+
+    #[test]
+    fn test_gh_command_candidates_include_macos_package_manager_paths() {
+        assert!(GH_COMMAND_CANDIDATES.contains(&"gh"));
+        assert!(GH_COMMAND_CANDIDATES.contains(&"/opt/homebrew/bin/gh"));
+        assert!(GH_COMMAND_CANDIDATES.contains(&"/usr/local/bin/gh"));
     }
 }
