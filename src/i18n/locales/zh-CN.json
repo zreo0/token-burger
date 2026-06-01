@@ -67,8 +67,16 @@
         "noData": "暂无账号用量数据",
         "notDetected": "未检测到认证文件或凭据",
         "experimentalWarning": "账号用量追踪是一项实验性功能。",
+        "provider": "Provider",
+        "available": "可用",
+        "accountUsageShort": "统计",
+        "menuBarShort": "菜单栏",
         "menuBarDisplay": "菜单栏显示",
         "menuBarDisplayHint": "显示 Provider 图标和用量百分比",
+        "menuBarMacOnly": "仅 macOS 支持",
+        "enableProviderFirst": "请先开启账号统计",
+        "refreshEvery": "每 {{seconds}} 秒刷新",
+        "requiresCredential": "需要凭据",
         "saveCredential": "保存凭据",
         "clearCredential": "清除"
     }

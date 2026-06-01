@@ -61,6 +61,7 @@
 .settings-container .segment-btn:focus-visible,
 .settings-container .select-wrapper select:focus-visible,
 .settings-container .mac-number-input input:focus-visible,
+.settings-container .usage-credential-inline-field input:focus-visible,
 .settings-container .mac-btn:focus-visible,
 .settings-container .mac-toggle input:focus-visible + .mac-toggle-slider {
     outline: none;
@@ -241,6 +242,214 @@
 .settings-container .agent-status {
     font-size: 12px;
     color: rgba(0, 0, 0, 0.5);
+}
+
+/* Account Usage */
+.settings-container .usage-provider-compact-list {
+    background: #ffffff;
+}
+
+.settings-container .usage-provider-compact-header,
+.settings-container .usage-provider-compact-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 82px 82px;
+    align-items: center;
+}
+
+.settings-container .usage-provider-compact-header {
+    padding: 9px 16px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(0, 0, 0, 0.42);
+}
+
+.settings-container .usage-provider-compact-header span:not(:first-child) {
+    text-align: center;
+}
+
+.settings-container .usage-provider-compact-row {
+    min-height: 58px;
+    padding: 9px 16px;
+    box-sizing: border-box;
+}
+
+.settings-container .usage-provider-compact-row.enabled {
+    background: rgba(52, 199, 89, 0.045);
+}
+
+.settings-container .usage-provider-identity {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.settings-container .usage-provider-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.06);
+    color: rgba(0, 0, 0, 0.72);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.settings-container .usage-provider-avatar.provider-github-copilot {
+    background: rgba(0, 0, 0, 0.055);
+}
+
+.settings-container .usage-provider-avatar img {
+    display: block;
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+    opacity: 0.78;
+}
+
+.settings-container .usage-provider-avatar.provider-codex img {
+    width: 19px;
+    height: 19px;
+}
+
+.settings-container .usage-provider-title-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.settings-container .usage-provider-title-line {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+}
+
+.settings-container .usage-provider-compact-name {
+    overflow: hidden;
+    color: #1c1c1e;
+    font-size: 14px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.settings-container .usage-provider-status-badge {
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.05);
+    color: rgba(0, 0, 0, 0.52);
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.settings-container .usage-provider-status-badge.enabled {
+    background: rgba(52, 199, 89, 0.14);
+    color: #1b7f38;
+}
+
+.settings-container .usage-provider-compact-hint {
+    overflow: hidden;
+    color: rgba(0, 0, 0, 0.44);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.settings-container .usage-provider-switch-cell {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    min-width: 0;
+}
+
+.settings-container .usage-provider-switch-cell input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.settings-container .usage-provider-checkmark {
+    display: inline-flex;
+    width: 34px;
+    height: 22px;
+    border-radius: 11px;
+    background: rgba(120, 120, 128, 0.18);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06);
+    transition: background 180ms ease;
+}
+
+.settings-container .usage-provider-checkmark::before {
+    content: '';
+    width: 18px;
+    height: 18px;
+    margin: 2px;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+    transition: transform 180ms ease;
+}
+
+.settings-container .usage-provider-switch-cell input:checked + .usage-provider-checkmark {
+    background: #34c759;
+}
+
+.settings-container .usage-provider-switch-cell input:checked + .usage-provider-checkmark::before {
+    transform: translateX(12px);
+}
+
+.settings-container .usage-provider-switch-cell input:focus-visible + .usage-provider-checkmark {
+    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.22), inset 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.settings-container .usage-provider-switch-cell.disabled {
+    opacity: 0.44;
+}
+
+.settings-container .usage-credential-inline-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 8px;
+    align-items: end;
+    padding: 0 16px 12px 56px;
+}
+
+.settings-container .usage-credential-inline-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    color: rgba(0, 0, 0, 0.52);
+    font-size: 11px;
+}
+
+.settings-container .usage-credential-inline-field input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 7px;
+    background: #ffffff;
+    color: #1c1c1e;
+    font-size: 13px;
+    outline: none;
+}
+
+@media (max-width: 560px) {
+    .settings-container .usage-provider-compact-header,
+    .settings-container .usage-provider-compact-row {
+        grid-template-columns: minmax(0, 1fr) 62px 62px;
+    }
+
+    .settings-container .usage-credential-inline-form {
+        grid-template-columns: 1fr;
+        padding-left: 16px;
+    }
 }
 
 /* Mac Toggle */
@@ -565,6 +774,70 @@
     .settings-container .agent-status,
     .settings-container .mac-number-input .suffix {
         color: rgba(255, 255, 255, 0.5);
+    }
+
+    .settings-container .usage-provider-compact-list {
+        background: rgba(255, 255, 255, 0.06);
+    }
+
+    .settings-container .usage-provider-compact-header {
+        color: rgba(255, 255, 255, 0.42);
+    }
+
+    .settings-container .usage-provider-compact-row.enabled {
+        background: rgba(48, 209, 88, 0.055);
+    }
+
+    .settings-container .usage-provider-avatar {
+        background: rgba(255, 255, 255, 0.12);
+        color: rgba(255, 255, 255, 0.78);
+    }
+
+    .settings-container .usage-provider-avatar.provider-github-copilot {
+        background: rgba(255, 255, 255, 0.12);
+    }
+
+    .settings-container .usage-provider-avatar img {
+        filter: invert(1);
+        opacity: 0.86;
+    }
+
+    .settings-container .usage-provider-avatar.provider-claude-code img {
+        filter: none;
+        opacity: 0.92;
+    }
+
+    .settings-container .usage-provider-compact-name {
+        color: #ffffff;
+    }
+
+    .settings-container .usage-provider-status-badge {
+        background: rgba(255, 255, 255, 0.1);
+        color: rgba(255, 255, 255, 0.58);
+    }
+
+    .settings-container .usage-provider-status-badge.enabled {
+        background: rgba(48, 209, 88, 0.16);
+        color: #6ee78a;
+    }
+
+    .settings-container .usage-provider-compact-hint,
+    .settings-container .usage-credential-inline-field {
+        color: rgba(255, 255, 255, 0.48);
+    }
+
+    .settings-container .usage-provider-checkmark {
+        background: rgba(255, 255, 255, 0.15);
+    }
+
+    .settings-container .usage-provider-checkmark::before {
+        background: #e5e5ea;
+    }
+
+    .settings-container .usage-credential-inline-field input {
+        border-color: rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.1);
+        color: #ffffff;
     }
 
     .settings-container .mac-toggle-slider {

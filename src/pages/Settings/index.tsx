@@ -9,12 +9,20 @@ import type { AccountUsageProviderInfo, AgentInfo, AppSettings, PlatformInfo } f
 import { getPlatformInfo } from '../../utils/platform';
 import { BURGER_THEMES } from '../../components/Burger/themes';
 import { useAccountUsageContext } from '../../context/AccountUsageContext';
+import claudeCodeProviderIcon from '../../assets/provider-icons/claude-code.svg';
+import openaiProviderIcon from '../../assets/provider-icons/openai.svg';
+import githubCopilotProviderIcon from '../../assets/provider-icons/github-copilot.svg';
 import './index.css';
 
 type Tab = 'general' | 'agents' | 'data' | 'usage' | 'about';
 
 // 账号用量 Provider 逐个开放，菜单栏展示仅对可计算百分比的 Provider 启用。
-const ENABLED_USAGE_PROVIDER_IDS = new Set(['codex']);
+const VISIBLE_USAGE_PROVIDER_IDS = new Set(['codex', 'github-copilot']);
+const USAGE_PROVIDER_ICONS: Record<string, string> = {
+    codex: openaiProviderIcon,
+    'claude-code': claudeCodeProviderIcon,
+    'github-copilot': githubCopilotProviderIcon,
+};
 
 type UpdateStatus =
     | { state: 'idle' }
@@ -27,6 +35,12 @@ type UpdateStatus =
 
 function canShowProviderInMenuBar(provider: AccountUsageProviderInfo): boolean {
     return provider.capabilities.includes('account_quota');
+}
+
+function usageProviderStatusKey(provider: AccountUsageProviderInfo): string {
+    if (provider.enabled) return 'settings.enabled';
+    if (provider.available) return 'usage.available';
+    return 'usage.notDetected';
 }
 
 function Settings() {
@@ -45,7 +59,7 @@ function Settings() {
     const [confirmAction, setConfirmAction] = useState<string | null>(null);
     const [appVersion, setAppVersion] = useState('');
     const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ state: 'idle' });
-    const visibleUsageProviders = usageProviders.filter(provider => ENABLED_USAGE_PROVIDER_IDS.has(provider.id));
+    const visibleUsageProviders = usageProviders.filter(provider => VISIBLE_USAGE_PROVIDER_IDS.has(provider.id));
     const isMac = platformInfo?.platform === 'macos';
 
     useEffect(() => {
@@ -330,75 +344,100 @@ function Settings() {
                                 </>
                             )}
                             {tab === 'usage' && (
-                                <div className="settings-group">
-                                    <div style={{ padding: '8px 12px', background: 'var(--bg-warning, #fff3cd)', color: 'var(--text-warning, #856404)', borderRadius: '6px', fontSize: '12px', marginBottom: '16px' }}>
-                                        {t('usage.experimentalWarning', 'Account usage tracking is an experimental feature.')}
+                                <div className="settings-group usage-provider-compact-list">
+                                    <div className="usage-provider-compact-header">
+                                        <span>{t('usage.provider', 'Provider')}</span>
+                                        <span>{t('usage.accountUsageShort', 'Usage')}</span>
+                                        <span>{t('usage.menuBarShort', 'Menu bar')}</span>
                                     </div>
-                                    {visibleUsageProviders.map((provider, index) => (
-                                        <div key={provider.id}>
-                                            <div className="setting-row agent-row">
-                                                <div className="agent-info">
-                                                    <div className="agent-name-row">
-                                                        <span className="agent-name">{provider.display_name}</span>
-                                                        {provider.experimental && <span className="agent-source-badge">Experimental</span>}
+                                    {visibleUsageProviders.map((provider, index) => {
+                                        const menuBarAvailable = isMac && provider.enabled && canShowProviderInMenuBar(provider);
+                                        const menuBarHint = !isMac
+                                            ? t('usage.menuBarMacOnly', 'macOS only')
+                                            : provider.enabled
+                                                ? t('usage.menuBarDisplayHint', 'Show the provider icon and usage percent')
+                                                : t('usage.enableProviderFirst', 'Enable account usage first');
+                                        const accountUsageHint = provider.available
+                                            ? t('usage.refreshEvery', { seconds: provider.refresh_interval_secs })
+                                            : provider.credential_requirements?.length > 0
+                                                ? t('usage.requiresCredential', 'Requires credential')
+                                                : t('usage.notDetected', 'Auth file or credential not detected');
+                                        const shouldShowCredentialForm = provider.credential_requirements?.length > 0 && (provider.enabled || !provider.available);
+                                        const statusKey = usageProviderStatusKey(provider);
+
+                                        return (
+                                            <div key={provider.id}>
+                                                <div className={`usage-provider-compact-row ${provider.enabled ? 'enabled' : ''}`}>
+                                                    <div className="usage-provider-identity">
+                                                        <span className={`usage-provider-avatar provider-${provider.id}`} aria-hidden="true">
+                                                            {USAGE_PROVIDER_ICONS[provider.id] ? (
+                                                                <img src={USAGE_PROVIDER_ICONS[provider.id]} alt="" />
+                                                            ) : (
+                                                                provider.display_name.slice(0, 1)
+                                                            )}
+                                                        </span>
+                                                        <div className="usage-provider-title-stack">
+                                                            <div className="usage-provider-title-line">
+                                                                <span className="usage-provider-compact-name">{provider.display_name}</span>
+                                                                <span className={`usage-provider-status-badge ${provider.enabled ? 'enabled' : ''}`}>
+                                                                    {t(statusKey)}
+                                                                </span>
+                                                            </div>
+                                                            {!provider.available && (
+                                                                <span className="usage-provider-compact-hint">{accountUsageHint}</span>
+                                                            )}
+                                                        </div>
                                                     </div>
-                                                </div>
-                                                <label className="mac-toggle">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={provider.enabled}
-                                                        onChange={(e) => setUsageEnabled(provider.id, e.target.checked)}
-                                                    />
-                                                    <span className="mac-toggle-slider" />
-                                                </label>
-                                            </div>
-                                            {isMac && provider.enabled && canShowProviderInMenuBar(provider) && (
-                                                <div className="setting-row usage-menu-bar-row">
-                                                    <div className="agent-info">
-                                                        <span className="setting-label">{t('usage.menuBarDisplay')}</span>
-                                                        <span className="agent-status">{t('usage.menuBarDisplayHint')}</span>
-                                                    </div>
-                                                    <label className="mac-toggle">
+                                                    <label className="usage-provider-switch-cell" title={accountUsageHint}>
                                                         <input
                                                             type="checkbox"
-                                                            checked={provider.show_in_menu_bar}
-                                                            onChange={(e) => setMenuBarVisible(provider.id, e.target.checked)}
+                                                            checked={provider.enabled}
+                                                            onChange={(e) => setUsageEnabled(provider.id, e.target.checked)}
+                                                            aria-label={`${provider.display_name} ${t('usage.accountUsageShort', 'Usage')}`}
                                                         />
-                                                        <span className="mac-toggle-slider" />
+                                                        <span className="usage-provider-checkmark" />
+                                                    </label>
+                                                    <label className={`usage-provider-switch-cell ${!menuBarAvailable ? 'disabled' : ''}`} title={menuBarHint}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={provider.enabled && provider.show_in_menu_bar}
+                                                            disabled={!menuBarAvailable}
+                                                            onChange={(e) => setMenuBarVisible(provider.id, e.target.checked)}
+                                                            aria-label={`${provider.display_name} ${t('usage.menuBarShort', 'Menu bar')}`}
+                                                        />
+                                                        <span className="usage-provider-checkmark" />
                                                     </label>
                                                 </div>
-                                            )}
-                                            {provider.enabled && provider.credential_requirements?.length > 0 && (
-                                                <div style={{ padding: '12px', background: 'var(--bg-secondary)', borderRadius: '6px', marginTop: '8px' }}>
-                                                    <form onSubmit={(e) => {
-                                                        e.preventDefault();
-                                                        const formData = new FormData(e.currentTarget);
-                                                        const firstRequirement = provider.credential_requirements[0];
-                                                        const secret = String(formData.get(firstRequirement.key) ?? '');
-                                                        saveCredential(provider.id, firstRequirement.key, secret, firstRequirement.label);
-                                                    }}>
+                                                {shouldShowCredentialForm && (
+                                                    <form
+                                                        className="usage-credential-inline-form"
+                                                        onSubmit={(e) => {
+                                                            e.preventDefault();
+                                                            const formData = new FormData(e.currentTarget);
+                                                            const firstRequirement = provider.credential_requirements[0];
+                                                            const secret = String(formData.get(firstRequirement.key) ?? '');
+                                                            saveCredential(provider.id, firstRequirement.key, secret, firstRequirement.label);
+                                                        }}
+                                                    >
                                                         {provider.credential_requirements.map(req => (
-                                                            <div key={req.key} style={{ marginBottom: '8px' }}>
-                                                                <label style={{ display: 'block', fontSize: '12px', marginBottom: '4px' }}>{req.label}</label>
+                                                            <label key={req.key} className="usage-credential-inline-field">
+                                                                <span>{req.label}</span>
                                                                 <input
                                                                     name={req.key}
                                                                     type={req.secret ? 'password' : 'text'}
                                                                     placeholder={req.description}
                                                                     required={req.required}
-                                                                    style={{ width: '100%', padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)' }}
                                                                 />
-                                                            </div>
+                                                            </label>
                                                         ))}
-                                                        <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-                                                            <button type="submit" className="mac-btn">{t('usage.saveCredential', 'Save Credential')}</button>
-                                                            <button type="button" className="mac-btn danger-text" onClick={() => clearCredential(provider.id)}>{t('usage.clearCredential', 'Clear')}</button>
-                                                        </div>
+                                                        <button type="submit" className="mac-btn">{t('usage.saveCredential', 'Save Credential')}</button>
+                                                        <button type="button" className="mac-btn danger-text" onClick={() => clearCredential(provider.id)}>{t('usage.clearCredential', 'Clear')}</button>
                                                     </form>
-                                                </div>
-                                            )}
-                                            {index < visibleUsageProviders.length - 1 && <div className="setting-divider" />}
-                                        </div>
-                                    ))}
+                                                )}
+                                                {index < visibleUsageProviders.length - 1 && <div className="setting-divider" />}
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             )}
                             {tab === 'about' && (

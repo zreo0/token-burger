@@ -67,8 +67,16 @@
         "noData": "No account usage data yet",
         "notDetected": "Auth file or credential not detected",
         "experimentalWarning": "Account usage tracking is an experimental feature.",
+        "provider": "Provider",
+        "available": "Ready",
+        "accountUsageShort": "Usage",
+        "menuBarShort": "Menu bar",
         "menuBarDisplay": "Menu bar display",
         "menuBarDisplayHint": "Show the provider icon and usage percent",
+        "menuBarMacOnly": "macOS only",
+        "enableProviderFirst": "Enable account usage first",
+        "refreshEvery": "Refresh every {{seconds}}s",
+        "requiresCredential": "Requires credential",
         "saveCredential": "Save Credential",
         "clearCredential": "Clear"
     }
