@@ -114,6 +114,20 @@
     color: #1c1c1e;
 }
 
+.settings-container .setting-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.settings-container .setting-hint {
+    max-width: 360px;
+    font-size: 12px;
+    line-height: 1.35;
+    color: rgba(0, 0, 0, 0.46);
+}
+
 .settings-container .setting-divider {
     height: 1px;
     background: rgba(0, 0, 0, 0.05);

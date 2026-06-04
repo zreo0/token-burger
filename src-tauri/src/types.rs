@@ -43,6 +43,7 @@ pub struct AppSettings {
     pub polling_interval_secs: u32,
     pub language: String,
     pub color_theme: String,
+    pub behavior_tips_enabled: bool,
 }
 
 impl Default for AppSettings {
@@ -54,6 +55,7 @@ impl Default for AppSettings {
             polling_interval_secs: 10,
             language: "en".into(),
             color_theme: "warm".into(),
+            behavior_tips_enabled: true,
         }
     }
 }

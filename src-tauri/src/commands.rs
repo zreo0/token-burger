@@ -18,9 +18,10 @@ use crate::account_usage::{
     AccountUsageSnapshot,
 };
 use crate::adapters;
+use crate::behavior::dispatcher::BehaviorDispatcher;
 use crate::db;
 use crate::types::{AgentInfo, AppSettings, PlatformInfo, PricingTable, TokenSummary};
-use crate::watcher;
+use crate::watcher::{self, BehaviorRuntime};
 
 const ACCOUNT_USAGE_IDLE_POLL_SECS: u64 = 30;
 const ACCOUNT_USAGE_SLEEP_SLICE_MS: u64 = 500;
@@ -34,6 +35,8 @@ pub struct AppState {
     pub account_usage: AccountUsageManager,
     pub(crate) account_usage_refresher: Mutex<Option<AccountUsageRefreshWorker>>,
     pub cold_start_complete: Arc<AtomicBool>,
+    pub behavior: Arc<BehaviorDispatcher>,
+    pub behavior_tips_enabled: Arc<AtomicBool>,
 }
 
 /// 账号用量后台刷新线程
@@ -312,10 +315,19 @@ fn restart_watcher(state: &AppState) {
         polling_interval_secs,
         keep_days,
     };
+    let behavior = Some(BehaviorRuntime {
+        enabled: state.behavior_tips_enabled.clone(),
+        dispatcher: state.behavior.clone(),
+    });
 
     let write_tx = state.write_tx.lock().unwrap().clone();
-    let new_watcher =
-        watcher::WatcherEngine::start_monitoring(active_adapters, write_tx, config, db_path_buf);
+    let new_watcher = watcher::WatcherEngine::start_monitoring(
+        active_adapters,
+        write_tx,
+        config,
+        db_path_buf,
+        behavior,
+    );
     state.cold_start_complete.store(true, Ordering::Release);
 
     *watcher_guard = Some(new_watcher);
@@ -445,6 +457,10 @@ pub fn get_settings(state: State<AppState>) -> Result<AppSettings, String> {
     let color_theme = db::queries::get_setting(&conn, "color_theme")
         .unwrap_or(None)
         .unwrap_or(defaults.color_theme);
+    let behavior_tips_enabled = db::queries::get_setting(&conn, "behavior_tips_enabled")
+        .unwrap_or(None)
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(defaults.behavior_tips_enabled);
 
     Ok(AppSettings {
         enabled_agents,
@@ -453,6 +469,7 @@ pub fn get_settings(state: State<AppState>) -> Result<AppSettings, String> {
         polling_interval_secs,
         language,
         color_theme,
+        behavior_tips_enabled,
     })
 }
 
@@ -477,6 +494,18 @@ pub fn update_settings(
         let _ = app.emit("settings-color-theme-changed", &value);
     }
 
+    if key == "behavior_tips_enabled" {
+        let enabled = value
+            .parse::<bool>()
+            .unwrap_or(AppSettings::default().behavior_tips_enabled);
+        state
+            .behavior_tips_enabled
+            .store(enabled, Ordering::Release);
+        if !enabled {
+            state.behavior.clear();
+        }
+    }
+
     // watch_mode / polling_interval / enabled_agents 变更后重启 Watcher
     if matches!(
         key.as_str(),
@@ -490,6 +519,19 @@ pub fn update_settings(
         db::query_and_emit_today_summary(&app, &conn);
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn close_behavior_tip(state: State<AppState>) -> Result<(), String> {
+    state.behavior.close_current();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_current_behavior_tip(
+    state: State<AppState>,
+) -> Result<Option<crate::behavior::BehaviorTip>, String> {
+    Ok(state.behavior.current_tip())
 }
 
 #[tauri::command]

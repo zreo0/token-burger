@@ -53,12 +53,34 @@ export interface AppSettings {
     polling_interval_secs: number;
     language: string;
     color_theme: string;
+    behavior_tips_enabled: boolean;
 }
 
 // 当前运行平台
 export interface PlatformInfo {
     platform: string;
     display_name: string;
+}
+
+export type AgentBehaviorKind =
+    | 'turn_started'
+    | 'permission_requested'
+    | 'permission_resolved'
+    | 'run_completed'
+    | 'run_aborted'
+    | 'tool_error';
+
+export interface BehaviorTip {
+    key: string;
+    agent_name: string;
+    session_id: string;
+    turn_id?: string | null;
+    call_id?: string | null;
+    kind: AgentBehaviorKind;
+    timestamp: string;
+    title: string;
+    summary: string;
+    auto_hide_ms?: number | null;
 }
 
 // 模型价格信息

@@ -26,6 +26,8 @@
         "themeMuted": "Muted",
         "themeVivid": "Vivid",
         "watchMode": "Watch Mode",
+        "behaviorTips": "Behavior Tips",
+        "behaviorTipsHint": "Show a lightweight tip when an agent needs permission or finishes a turn",
         "realtime": "Realtime",
         "polling": "Polling",
         "keepDays": "Keep data for",

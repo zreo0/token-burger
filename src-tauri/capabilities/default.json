@@ -1,7 +1,7 @@
 {
     "identifier": "default",
     "description": "Default capability for popup and settings windows",
-    "windows": ["popup", "settings"],
+    "windows": ["popup", "settings", "behavior-tip"],
     "permissions": [
         "core:default",
         "core:event:default",

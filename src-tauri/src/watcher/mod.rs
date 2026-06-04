@@ -15,6 +15,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
 use crate::adapters::{AgentAdapter, DataSource};
+use crate::behavior::dispatcher::BehaviorDispatcher;
 use crate::db::WriteRequest;
 use crate::types::ColdStartProgress;
 
@@ -63,6 +64,20 @@ pub struct WatcherConfig {
     pub keep_days: u32,
 }
 
+/// 行为解析运行时，只在正常监听阶段使用
+#[derive(Clone)]
+pub struct BehaviorRuntime {
+    pub enabled: Arc<AtomicBool>,
+    pub dispatcher: Arc<BehaviorDispatcher>,
+}
+
+impl BehaviorRuntime {
+    /// 判断当前是否允许执行行为解析 fan-out
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Acquire)
+    }
+}
+
 /// Watcher 引擎：管理所有监听策略
 pub struct WatcherEngine {
     stop_flag: Arc<AtomicBool>,
@@ -78,6 +93,7 @@ impl WatcherEngine {
         config: WatcherConfig,
         db_path: PathBuf,
         cold_start_complete: Arc<AtomicBool>,
+        behavior: Option<BehaviorRuntime>,
     ) -> Self {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let flag = stop_flag.clone();
@@ -128,6 +144,7 @@ impl WatcherEngine {
                 &config,
                 &db_path,
                 &known_offsets,
+                behavior.as_ref(),
             );
         });
 
@@ -143,6 +160,7 @@ impl WatcherEngine {
         write_tx: Sender<WriteRequest>,
         config: WatcherConfig,
         db_path: PathBuf,
+        behavior: Option<BehaviorRuntime>,
     ) -> Self {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let flag = stop_flag.clone();
@@ -156,6 +174,7 @@ impl WatcherEngine {
                 &config,
                 &db_path,
                 &known_offsets,
+                behavior.as_ref(),
             );
         });
 
@@ -335,6 +354,7 @@ fn start_watchers(
     config: &WatcherConfig,
     _db_path: &std::path::Path,
     known_offsets: &std::collections::HashMap<String, u64>,
+    behavior: Option<&BehaviorRuntime>,
 ) {
     // 分组
     let mut jsonl_adapters: Vec<&dyn AgentAdapter> = Vec::new();
@@ -366,6 +386,7 @@ fn start_watchers(
 
         if is_realtime {
             let initial_offsets = known_offsets.clone();
+            let behavior_runtime = behavior.cloned();
             thread::spawn(move || {
                 notify_strategy::run_notify_polling(
                     adapter_names,
@@ -373,11 +394,20 @@ fn start_watchers(
                     tx,
                     flag,
                     initial_offsets,
+                    behavior_runtime,
                 );
             });
         } else {
+            let behavior_runtime = behavior.cloned();
             thread::spawn(move || {
-                polling_strategy::run_polling(adapter_names, log_patterns, tx, flag, poll_secs);
+                polling_strategy::run_polling(
+                    adapter_names,
+                    log_patterns,
+                    tx,
+                    flag,
+                    poll_secs,
+                    behavior_runtime,
+                );
             });
         }
     }
@@ -392,8 +422,16 @@ fn start_watchers(
             .collect();
         let log_patterns: Vec<Vec<String>> = json_adapters.iter().map(|a| a.log_paths()).collect();
 
+        let behavior_runtime = behavior.cloned();
         thread::spawn(move || {
-            polling_strategy::run_polling(adapter_names, log_patterns, tx, flag, poll_secs);
+            polling_strategy::run_polling(
+                adapter_names,
+                log_patterns,
+                tx,
+                flag,
+                poll_secs,
+                behavior_runtime,
+            );
         });
     }
 
@@ -407,9 +445,18 @@ fn start_watchers(
             let initial_offset = known_offsets
                 .get(&sqlite_offset_key(adapter_db_path))
                 .copied();
+            let behavior_runtime = behavior.cloned();
 
             thread::spawn(move || {
-                sqlite_strategy::run_sqlite_polling(name, dp, tx, flag, poll_secs, initial_offset);
+                sqlite_strategy::run_sqlite_polling(
+                    name,
+                    dp,
+                    tx,
+                    flag,
+                    poll_secs,
+                    initial_offset,
+                    behavior_runtime,
+                );
             });
         }
     }

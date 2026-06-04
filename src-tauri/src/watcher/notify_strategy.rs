@@ -10,13 +10,16 @@ use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebouncedEvent};
 
 use crate::adapters::{all_adapters, codex};
+use crate::behavior;
 use crate::db::WriteRequest;
+use crate::watcher::BehaviorRuntime;
 
 struct PathChangeContext<'a> {
     adapter_names: &'a [String],
     adapters: &'a [Box<dyn crate::adapters::AgentAdapter>],
     path_to_adapter: &'a HashMap<String, usize>,
     write_tx: &'a Sender<WriteRequest>,
+    behavior: Option<BehaviorRuntime>,
 }
 
 /// 基于 notify-debouncer-full 的实时监听策略
@@ -30,6 +33,7 @@ pub fn run_notify_polling(
     write_tx: Sender<WriteRequest>,
     stop_flag: Arc<AtomicBool>,
     initial_offsets: HashMap<String, u64>,
+    behavior: Option<BehaviorRuntime>,
 ) {
     // path → adapter index
     let mut path_to_adapter: HashMap<String, usize> = HashMap::new();
@@ -113,6 +117,7 @@ pub fn run_notify_polling(
                     &mut file_offsets,
                     &mut codex_model_cache,
                     &write_tx,
+                    behavior.clone(),
                 );
             }
             Ok(Err(errs)) => {
@@ -140,6 +145,7 @@ pub fn run_notify_polling(
                         &mut file_offsets,
                         &mut codex_model_cache,
                         &write_tx,
+                        behavior.clone(),
                     );
                     since_last_scan = std::time::Instant::now();
                 }
@@ -161,12 +167,14 @@ fn process_events(
     file_offsets: &mut HashMap<String, u64>,
     codex_model_cache: &mut HashMap<String, String>,
     write_tx: &Sender<WriteRequest>,
+    behavior: Option<BehaviorRuntime>,
 ) {
     let context = PathChangeContext {
         adapter_names,
         adapters,
         path_to_adapter,
         write_tx,
+        behavior,
     };
 
     for event in events {
@@ -191,12 +199,14 @@ fn reconcile_registered_paths(
     file_offsets: &mut HashMap<String, u64>,
     codex_model_cache: &mut HashMap<String, String>,
     write_tx: &Sender<WriteRequest>,
+    behavior: Option<BehaviorRuntime>,
 ) {
     let context = PathChangeContext {
         adapter_names,
         adapters,
         path_to_adapter,
         write_tx,
+        behavior,
     };
 
     let paths: Vec<String> = path_to_adapter.keys().cloned().collect();
@@ -279,6 +289,7 @@ fn process_path_change(
             );
             let _ = context.write_tx.send(WriteRequest::InsertTokenLogs(logs));
         }
+        dispatch_behavior_events(agent_name, path_str, &content, &context.behavior);
         file_offsets.insert(path_str.to_string(), new_size);
         let _ = context.write_tx.send(WriteRequest::UpdateOffset {
             file_path: path_str.to_string(),
@@ -291,7 +302,7 @@ fn process_path_change(
         return;
     }
 
-    let logs = match parse_changed_content(
+    let parsed = match parse_changed_content(
         path,
         path_str,
         prev_offset,
@@ -299,7 +310,7 @@ fn process_path_change(
         adapter.as_ref(),
         codex_model_cache,
     ) {
-        Ok(logs) => logs,
+        Ok(parsed) => parsed,
         Err(err) => {
             log::warn!(
                 "[{}] {}: 增量读取失败，保留 offset {}: {}",
@@ -311,6 +322,7 @@ fn process_path_change(
             return;
         }
     };
+    let logs = parsed.logs;
     if !logs.is_empty() {
         let total_tokens: i64 = logs.iter().map(|l| l.token_count).sum();
         let models: Vec<&str> = logs
@@ -331,6 +343,12 @@ fn process_path_change(
         );
         let _ = context.write_tx.send(WriteRequest::InsertTokenLogs(logs));
     }
+    dispatch_behavior_events(
+        agent_name,
+        path_str,
+        &parsed.behavior_content,
+        &context.behavior,
+    );
     file_offsets.insert(path_str.to_string(), new_size);
     let _ = context.write_tx.send(WriteRequest::UpdateOffset {
         file_path: path_str.to_string(),
@@ -345,21 +363,51 @@ fn parse_changed_content(
     agent_name: &str,
     adapter: &dyn crate::adapters::AgentAdapter,
     codex_model_cache: &mut HashMap<String, String>,
-) -> std::io::Result<Vec<crate::adapters::TokenLog>> {
+) -> std::io::Result<ParsedFileBatch> {
     if agent_name != "codex" {
         let content = read_from_offset(path, prev_offset)?;
-        return Ok(adapter.parse_content(&content));
+        return Ok(ParsedFileBatch {
+            logs: adapter.parse_content(&content),
+            behavior_content: content,
+        });
     }
 
-    let (content, initial_model) = match codex_model_cache.get(path_str) {
-        Some(model) => (read_from_offset(path, prev_offset)?, model.as_str()),
+    let behavior_content = read_from_offset(path, prev_offset)?;
+    let (token_content, initial_model) = match codex_model_cache.get(path_str) {
+        Some(model) => (behavior_content.clone(), model.as_str()),
         None => (std::fs::read_to_string(path)?, codex::DEFAULT_CODEX_MODEL),
     };
 
-    let parsed = codex::parse_content_with_model(&content, initial_model);
+    let parsed = codex::parse_content_with_model(&token_content, initial_model);
     codex_model_cache.insert(path_str.to_string(), parsed.final_model);
 
-    Ok(parsed.logs)
+    Ok(ParsedFileBatch {
+        logs: parsed.logs,
+        behavior_content,
+    })
+}
+
+struct ParsedFileBatch {
+    logs: Vec<crate::adapters::TokenLog>,
+    behavior_content: String,
+}
+
+fn dispatch_behavior_events(
+    agent_name: &str,
+    path_str: &str,
+    content: &str,
+    behavior: &Option<BehaviorRuntime>,
+) {
+    let Some(runtime) = behavior else {
+        return;
+    };
+    if !runtime.is_enabled() || agent_name != "codex" {
+        return;
+    }
+
+    for event in behavior::codex::parse_events(content, path_str) {
+        runtime.dispatcher.handle_event(event);
+    }
 }
 
 /// 从指定 offset 读取文件内容
@@ -390,7 +438,7 @@ mod tests {
         let adapter = CodexAdapter;
         let mut cache = HashMap::new();
 
-        let logs = parse_changed_content(
+        let parsed = parse_changed_content(
             &path,
             &path_str,
             initial.len() as u64,
@@ -399,6 +447,7 @@ mod tests {
             &mut cache,
         )
         .unwrap();
+        let logs = parsed.logs;
 
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].model_id, "gpt-5.4");
@@ -412,7 +461,7 @@ mod tests {
 "#;
         file.write_all(incremental.as_bytes()).unwrap();
 
-        let logs = parse_changed_content(
+        let parsed = parse_changed_content(
             &path,
             &path_str,
             initial.len() as u64,
@@ -421,6 +470,7 @@ mod tests {
             &mut cache,
         )
         .unwrap();
+        let logs = parsed.logs;
 
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].model_id, "gpt-5.4");
@@ -447,7 +497,7 @@ mod tests {
 "#;
         file.write_all(incremental.as_bytes()).unwrap();
 
-        let logs = parse_changed_content(
+        let parsed = parse_changed_content(
             &path,
             &path_str,
             initial.len() as u64,
@@ -456,6 +506,7 @@ mod tests {
             &mut cache,
         )
         .unwrap();
+        let logs = parsed.logs;
 
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].model_id, "gpt-5.5");
@@ -494,6 +545,7 @@ mod tests {
             &mut file_offsets,
             &mut codex_model_cache,
             &write_tx,
+            None,
         );
 
         match write_rx.recv().unwrap() {

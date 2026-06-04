@@ -26,6 +26,8 @@
         "themeMuted": "灰金",
         "themeVivid": "明亮",
         "watchMode": "监控模式",
+        "behaviorTips": "行为提醒",
+        "behaviorTipsHint": "在 Agent 等待权限或完成当前轮次时显示轻量提示",
         "realtime": "实时",
         "polling": "轮询",
         "keepDays": "数据保留",

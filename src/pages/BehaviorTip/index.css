@@ -1,0 +1,127 @@
+.behavior-tip-shell {
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+    background: transparent;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif;
+    user-select: none;
+}
+
+.behavior-tip-card {
+    position: relative;
+    display: grid;
+    grid-template-columns: 5px minmax(0, 1fr) 28px;
+    gap: 12px;
+    width: 100%;
+    height: 100%;
+    padding: 14px 13px 14px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 18px;
+    background: rgba(31, 31, 30, 0.94);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.07),
+        0 18px 34px rgba(0, 0, 0, 0.32);
+    color: #f4f1ec;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.behavior-tip-status {
+    width: 5px;
+    height: 100%;
+    border-radius: 999px;
+    align-self: stretch;
+    background: #d9c49f;
+    animation: behavior-tip-breathe 2.6s ease-in-out infinite;
+}
+
+.behavior-tip-card.success .behavior-tip-status {
+    background: #32d76d;
+}
+
+.behavior-tip-card.warning .behavior-tip-status {
+    background: #bc6657;
+}
+
+.behavior-tip-card.neutral .behavior-tip-status {
+    background: #9c9a95;
+}
+
+.behavior-tip-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+}
+
+.behavior-tip-meta {
+    font-size: 11px;
+    line-height: 1;
+    font-weight: 700;
+    letter-spacing: 0;
+    color: rgba(244, 241, 236, 0.52);
+}
+
+.behavior-tip-title {
+    font-size: 15px;
+    line-height: 1.15;
+    font-weight: 700;
+    color: rgba(244, 241, 236, 0.96);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.behavior-tip-summary {
+    font-size: 12px;
+    line-height: 1.25;
+    font-weight: 500;
+    color: rgba(244, 241, 236, 0.62);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.behavior-tip-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.07);
+    color: rgba(244, 241, 236, 0.7);
+    font-size: 18px;
+    line-height: 1;
+    cursor: default;
+    align-self: start;
+    transition: background 140ms ease, color 140ms ease;
+}
+
+.behavior-tip-close:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: rgba(244, 241, 236, 0.94);
+}
+
+.behavior-tip-close:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(217, 196, 159, 0.22);
+}
+
+@keyframes behavior-tip-breathe {
+    0%,
+    100% {
+        opacity: 0.62;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+

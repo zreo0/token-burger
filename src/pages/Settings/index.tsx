@@ -231,6 +231,21 @@ function Settings() {
                                     </div>
                                     <div className="setting-divider" />
                                     <div className="setting-row">
+                                        <div className="setting-copy">
+                                            <span className="setting-label">{t('settings.behaviorTips')}</span>
+                                            <span className="setting-hint">{t('settings.behaviorTipsHint')}</span>
+                                        </div>
+                                        <label className="mac-toggle">
+                                            <input
+                                                type="checkbox"
+                                                checked={settings.behavior_tips_enabled}
+                                                onChange={() => updateSetting('behavior_tips_enabled', String(!settings.behavior_tips_enabled))}
+                                            />
+                                            <span className="mac-toggle-slider" />
+                                        </label>
+                                    </div>
+                                    <div className="setting-divider" />
+                                    <div className="setting-row">
                                         <span className="setting-label">{t('settings.watchMode')}</span>
                                         <div className="segmented-control">
                                             {['realtime', 'polling'].map((mode) => (

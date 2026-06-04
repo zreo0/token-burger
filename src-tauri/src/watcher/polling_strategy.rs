@@ -7,7 +7,9 @@ use std::sync::{
 use std::time::Duration;
 
 use crate::adapters::all_adapters;
+use crate::behavior;
 use crate::db::WriteRequest;
+use crate::watcher::BehaviorRuntime;
 
 /// 定时轮询策略（用于 JSON 文件，基于 mtime 变化检测）
 pub fn run_polling(
@@ -16,8 +18,10 @@ pub fn run_polling(
     write_tx: Sender<WriteRequest>,
     stop_flag: Arc<AtomicBool>,
     poll_interval_secs: u32,
+    behavior_runtime: Option<BehaviorRuntime>,
 ) {
     let mut mtime_cache: HashMap<String, u64> = HashMap::new();
+    let mut file_offsets: HashMap<String, u64> = HashMap::new();
     let adapters = all_adapters();
 
     loop {
@@ -81,8 +85,28 @@ pub fn run_polling(
                             );
                             let _ = write_tx.send(WriteRequest::InsertTokenLogs(logs));
                         }
+
+                        if let Some(runtime) = behavior_runtime.as_ref() {
+                            if runtime.is_enabled() && agent_name == "codex" {
+                                let prev_size = file_offsets.get(&path).copied();
+                                let changed_content = match prev_size {
+                                    Some(prev_size) if meta.len() >= prev_size => {
+                                        super::notify_strategy::read_from_offset(&entry, prev_size)
+                                            .unwrap_or_default()
+                                    }
+                                    Some(_) => content.clone(),
+                                    None => String::new(),
+                                };
+
+                                for event in behavior::codex::parse_events(&changed_content, &path)
+                                {
+                                    runtime.dispatcher.handle_event(event);
+                                }
+                            }
+                        }
                     }
-                    mtime_cache.insert(path, mtime);
+                    mtime_cache.insert(path.clone(), mtime);
+                    file_offsets.insert(path, meta.len());
                 }
             }
         }

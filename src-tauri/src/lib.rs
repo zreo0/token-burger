@@ -1,5 +1,6 @@
 mod account_usage;
 mod adapters;
+mod behavior;
 mod commands;
 mod db;
 pub mod logger;
@@ -210,12 +211,18 @@ pub fn run() {
                         let language = db::queries::get_setting(&c, "language")
                             .unwrap_or(None)
                             .unwrap_or(defaults.language.clone());
+                        let behavior_tips_enabled =
+                            db::queries::get_setting(&c, "behavior_tips_enabled")
+                                .unwrap_or(None)
+                                .and_then(|v| v.parse().ok())
+                                .unwrap_or(defaults.behavior_tips_enabled);
                         (
                             enabled_agents,
                             keep_days,
                             watch_mode,
                             polling_interval_secs,
                             language,
+                            behavior_tips_enabled,
                         )
                     }
                     None => (
@@ -224,14 +231,26 @@ pub fn run() {
                         defaults.watch_mode,
                         defaults.polling_interval_secs,
                         defaults.language,
+                        defaults.behavior_tips_enabled,
                     ),
                 }
             };
-            let (enabled_agents, keep_days, watch_mode, polling_interval_secs, language) = settings;
+            let (
+                enabled_agents,
+                keep_days,
+                watch_mode,
+                polling_interval_secs,
+                language,
+                behavior_tips_enabled,
+            ) = settings;
 
             // 注册共享状态
             let db_path_str = db_path.to_string_lossy().to_string();
             let cold_start_complete = Arc::new(AtomicBool::new(false));
+            let behavior_tips_enabled = Arc::new(AtomicBool::new(behavior_tips_enabled));
+            let behavior = Arc::new(behavior::dispatcher::BehaviorDispatcher::new(
+                app.handle().clone(),
+            ));
 
             // 启动写入线程
             let db_manager = db::DbManager::start(db_path.clone(), app.handle().clone());
@@ -250,6 +269,10 @@ pub fn run() {
                 polling_interval_secs,
                 keep_days,
             };
+            let behavior_runtime = Some(watcher::BehaviorRuntime {
+                enabled: behavior_tips_enabled.clone(),
+                dispatcher: behavior.clone(),
+            });
             let watcher_engine = watcher::WatcherEngine::start(
                 active_adapters,
                 db_manager.write_tx,
@@ -257,6 +280,7 @@ pub fn run() {
                 watcher_config,
                 db_path.clone(),
                 cold_start_complete.clone(),
+                behavior_runtime,
             );
 
             app.manage(commands::AppState {
@@ -267,6 +291,8 @@ pub fn run() {
                 account_usage: account_usage_manager,
                 account_usage_refresher: std::sync::Mutex::new(None),
                 cold_start_complete: cold_start_complete.clone(),
+                behavior: behavior.clone(),
+                behavior_tips_enabled: behavior_tips_enabled.clone(),
             });
             commands::start_account_usage_refresher(app.handle());
 
@@ -324,6 +350,9 @@ pub fn run() {
                     } = event
                     {
                         let app = tray.app_handle();
+                        if let Some(state) = app.try_state::<commands::AppState>() {
+                            state.behavior.cache_tray_rect(&rect);
+                        }
                         if !commands::is_cold_start_complete(app) {
                             return;
                         }
@@ -366,6 +395,8 @@ pub fn run() {
             commands::get_account_usage_provider_state,
             commands::set_account_usage_provider_enabled,
             commands::set_account_usage_provider_menu_bar_visible,
+            commands::close_behavior_tip,
+            commands::get_current_behavior_tip,
             resize_popup_window,
             restart_app,
         ])

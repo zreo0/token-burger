@@ -6,6 +6,7 @@ import { TokenProvider } from './context/TokenContext';
 import { AccountUsageProvider } from './context/AccountUsageContext';
 import Popup from './pages/Popup';
 import Settings from './pages/Settings';
+import BehaviorTip from './pages/BehaviorTip';
 import i18n from './i18n';
 import type { AppSettings } from './types';
 
@@ -46,6 +47,7 @@ function App() {
                     <Routes>
                         <Route path="/" element={<Popup />} />
                         <Route path="/settings" element={<Settings />} />
+                        <Route path="/behavior-tip" element={<BehaviorTip />} />
                     </Routes>
                 </HashRouter>
             </AccountUsageProvider>
