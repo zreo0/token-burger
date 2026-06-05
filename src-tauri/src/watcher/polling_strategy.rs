@@ -6,8 +6,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use crate::adapters::all_adapters;
-use crate::behavior;
+use crate::adapters::{all_agents, AgentDataBatch};
 use crate::db::WriteRequest;
 use crate::watcher::BehaviorRuntime;
 
@@ -22,7 +21,7 @@ pub fn run_polling(
 ) {
     let mut mtime_cache: HashMap<String, u64> = HashMap::new();
     let mut file_offsets: HashMap<String, u64> = HashMap::new();
-    let adapters = all_adapters();
+    let agents = all_agents();
 
     loop {
         // 可中断的等待：每 500ms 检查一次 stop_flag
@@ -40,11 +39,11 @@ pub fn run_polling(
 
         for (idx, patterns) in log_patterns.iter().enumerate() {
             let agent_name = &adapter_names[idx];
-            let adapter = adapters.iter().find(|a| a.agent_name() == agent_name);
-            if adapter.is_none() {
+            let agent = agents.iter().find(|a| a.agent_name() == agent_name);
+            if agent.is_none() {
                 continue;
             }
-            let adapter = adapter.unwrap();
+            let agent = agent.unwrap();
 
             for pattern in patterns {
                 let entries = match glob::glob(pattern) {
@@ -71,9 +70,16 @@ pub fn run_polling(
                         continue;
                     }
 
-                    // JSON 文件整体重新解析
                     if let Ok(content) = std::fs::read_to_string(&entry) {
-                        let logs = adapter.parse_content(&content);
+                        let batch = build_polling_batch(
+                            agent_name,
+                            &entry,
+                            &path,
+                            content,
+                            &meta,
+                            &file_offsets,
+                        );
+                        let logs = agent.extract_tokens(&batch).logs;
                         if !logs.is_empty() {
                             let total_tokens: i64 = logs.iter().map(|l| l.token_count).sum();
                             log::info!(
@@ -87,19 +93,8 @@ pub fn run_polling(
                         }
 
                         if let Some(runtime) = behavior_runtime.as_ref() {
-                            if runtime.is_enabled() && agent_name == "codex" {
-                                let prev_size = file_offsets.get(&path).copied();
-                                let changed_content = match prev_size {
-                                    Some(prev_size) if meta.len() >= prev_size => {
-                                        super::notify_strategy::read_from_offset(&entry, prev_size)
-                                            .unwrap_or_default()
-                                    }
-                                    Some(_) => content.clone(),
-                                    None => String::new(),
-                                };
-
-                                for event in behavior::codex::parse_events(&changed_content, &path)
-                                {
+                            if runtime.is_enabled() {
+                                for event in agent.extract_behavior(&batch) {
                                     runtime.dispatcher.handle_event(event);
                                 }
                             }
@@ -110,5 +105,54 @@ pub fn run_polling(
                 }
             }
         }
+    }
+}
+
+fn build_polling_batch(
+    agent_name: &str,
+    entry: &std::path::Path,
+    path: &str,
+    content: String,
+    meta: &std::fs::Metadata,
+    file_offsets: &HashMap<String, u64>,
+) -> AgentDataBatch {
+    let mtime = meta
+        .modified()
+        .unwrap_or(std::time::UNIX_EPOCH)
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    if entry.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
+        let behavior_content = if agent_name == "codex" {
+            match file_offsets.get(path).copied() {
+                Some(prev_size) if meta.len() >= prev_size => {
+                    super::notify_strategy::read_from_offset(entry, prev_size).unwrap_or_default()
+                }
+                Some(_) => content.clone(),
+                None => String::new(),
+            }
+        } else {
+            content.clone()
+        };
+
+        return AgentDataBatch::JsonlIncrement {
+            agent_name: agent_name.to_string(),
+            source_key: path.to_string(),
+            path: entry.to_path_buf(),
+            content: behavior_content,
+            token_context: Some(content),
+            initial_model: None,
+            previous_offset: file_offsets.get(path).copied().unwrap_or(0),
+            next_offset: meta.len(),
+        };
+    }
+
+    AgentDataBatch::JsonDocument {
+        agent_name: agent_name.to_string(),
+        source_key: path.to_string(),
+        path: entry.to_path_buf(),
+        content,
+        mtime,
     }
 }

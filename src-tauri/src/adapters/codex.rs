@@ -1,4 +1,7 @@
-use super::{AgentAdapter, DataSource, TokenLog, TokenType};
+use super::{
+    AgentDataBatch, AgentSource, BehaviorExtractor, DataSource, TokenExtraction, TokenExtractor,
+    TokenLog, TokenType,
+};
 
 pub(crate) const DEFAULT_CODEX_MODEL: &str = "codex";
 
@@ -9,7 +12,7 @@ pub(crate) struct CodexParseResult {
     pub final_model: String,
 }
 
-impl AgentAdapter for CodexAdapter {
+impl AgentSource for CodexAdapter {
     fn agent_name(&self) -> &str {
         "codex"
     }
@@ -26,9 +29,35 @@ impl AgentAdapter for CodexAdapter {
         // Codex 按日期分子目录存储：~/.codex/sessions/2026/04/18/*.jsonl
         vec![format!("{}/.codex/sessions/**/*.jsonl", home.display())]
     }
+}
 
-    fn parse_content(&self, content: &str) -> Vec<TokenLog> {
-        parse_content_with_model(content, DEFAULT_CODEX_MODEL).logs
+impl TokenExtractor for CodexAdapter {
+    fn extract_tokens(&self, batch: &AgentDataBatch) -> TokenExtraction {
+        let Some(content) = batch.token_content() else {
+            return TokenExtraction::default();
+        };
+        let initial_model = match batch {
+            AgentDataBatch::JsonlIncrement { initial_model, .. } => {
+                initial_model.as_deref().unwrap_or(DEFAULT_CODEX_MODEL)
+            }
+            _ => DEFAULT_CODEX_MODEL,
+        };
+        let parsed = parse_content_with_model(content, initial_model);
+
+        TokenExtraction {
+            logs: parsed.logs,
+            final_model: Some(parsed.final_model),
+        }
+    }
+}
+
+impl BehaviorExtractor for CodexAdapter {
+    fn extract_behavior(&self, batch: &AgentDataBatch) -> Vec<crate::behavior::AgentBehaviorEvent> {
+        let Some(content) = batch.behavior_content() else {
+            return Vec::new();
+        };
+
+        crate::behavior::codex::parse_events(content, batch.source_key())
     }
 }
 
@@ -174,12 +203,25 @@ fn parse_codex_line(
 mod tests {
     use super::*;
 
+    fn jsonl_batch(content: &str) -> AgentDataBatch {
+        AgentDataBatch::JsonlIncrement {
+            agent_name: "codex".to_string(),
+            source_key: "session.jsonl".to_string(),
+            path: "session.jsonl".into(),
+            content: content.to_string(),
+            token_context: None,
+            initial_model: None,
+            previous_offset: 0,
+            next_offset: content.len() as u64,
+        }
+    }
+
     #[test]
     fn test_parse_codex_token_count_usage() {
         let line = r#"{"type":"turn_context","payload":{"model":"gpt-5.5"}}
 {"timestamp":"2026-01-14T07:23:24.629Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":7851,"cached_input_tokens":0,"output_tokens":101,"reasoning_output_tokens":64,"total_tokens":7952},"last_token_usage":{"input_tokens":8079,"cached_input_tokens":7808,"output_tokens":48,"reasoning_output_tokens":64,"total_tokens":8191},"model_context_window":258400}}}"#;
         let adapter = CodexAdapter;
-        let logs = adapter.parse_content(line);
+        let logs = adapter.extract_tokens(&jsonl_batch(line)).logs;
 
         assert_eq!(logs.len(), 3);
         assert_eq!(logs[0].token_type, TokenType::Input);
@@ -201,7 +243,7 @@ mod tests {
         let line = r#"{"type":"turn_context","payload":{"model":"gpt-5.5"}}
 {"timestamp":"2026-04-25T17:09:13.596Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":60531,"cached_input_tokens":59776,"output_tokens":514,"reasoning_output_tokens":63,"total_tokens":61045}}}}"#;
         let adapter = CodexAdapter;
-        let logs = adapter.parse_content(line);
+        let logs = adapter.extract_tokens(&jsonl_batch(line)).logs;
 
         assert_eq!(logs.len(), 3);
         assert_eq!(logs[0].token_type, TokenType::Input);
@@ -216,7 +258,7 @@ mod tests {
     fn test_skip_non_token_count_event() {
         let line = r#"{"type":"turn_context","payload":{"model":"gpt-5.2-codex"}}"#;
         let adapter = CodexAdapter;
-        let logs = adapter.parse_content(line);
+        let logs = adapter.extract_tokens(&jsonl_batch(line)).logs;
         assert!(logs.is_empty());
     }
 
@@ -224,7 +266,7 @@ mod tests {
     fn test_parse_codex_token_count_without_turn_context_falls_back_to_codex() {
         let line = r#"{"timestamp":"2026-01-14T07:23:24.629Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1}}}}"#;
         let adapter = CodexAdapter;
-        let logs = adapter.parse_content(line);
+        let logs = adapter.extract_tokens(&jsonl_batch(line)).logs;
 
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].model_id, "codex");
@@ -237,7 +279,7 @@ mod tests {
 {"type":"turn_context","payload":{"model":"gpt-5.5"}}
 {"timestamp":"2026-01-14T07:24:24.629Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":2}}}}"#;
         let adapter = CodexAdapter;
-        let logs = adapter.parse_content(line);
+        let logs = adapter.extract_tokens(&jsonl_batch(line)).logs;
 
         assert_eq!(logs.len(), 2);
         assert_eq!(logs[0].model_id, "gpt-5.4");
@@ -248,13 +290,13 @@ mod tests {
     fn test_skip_null_last_token_usage() {
         let line = r#"{"timestamp":"2026-01-14T07:23:24.629Z","type":"event_msg","payload":{"type":"token_count","info":null}}"#;
         let adapter = CodexAdapter;
-        let logs = adapter.parse_content(line);
+        let logs = adapter.extract_tokens(&jsonl_batch(line)).logs;
         assert!(logs.is_empty());
     }
 
     #[test]
     fn test_empty_content() {
         let adapter = CodexAdapter;
-        assert!(adapter.parse_content("").is_empty());
+        assert!(adapter.extract_tokens(&jsonl_batch("")).logs.is_empty());
     }
 }

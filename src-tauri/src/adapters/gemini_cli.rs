@@ -1,8 +1,11 @@
-use super::{AgentAdapter, DataSource, TokenLog, TokenType};
+use super::{
+    AgentDataBatch, AgentSource, BehaviorExtractor, DataSource, TokenExtraction, TokenExtractor,
+    TokenLog, TokenType,
+};
 
 pub struct GeminiCliAdapter;
 
-impl AgentAdapter for GeminiCliAdapter {
+impl AgentSource for GeminiCliAdapter {
     fn agent_name(&self) -> &str {
         "gemini-cli"
     }
@@ -18,18 +21,30 @@ impl AgentAdapter for GeminiCliAdapter {
         let home = dirs::home_dir().unwrap_or_default();
         vec![format!("{}/.gemini/tmp/*/chats/*.json", home.display())]
     }
+}
 
-    fn parse_content(&self, content: &str) -> Vec<TokenLog> {
-        let now = chrono::Local::now()
-            .format("%Y-%m-%dT%H:%M:%S%:z")
-            .to_string();
+impl TokenExtractor for GeminiCliAdapter {
+    fn extract_tokens(&self, batch: &AgentDataBatch) -> TokenExtraction {
+        let Some(content) = batch.token_content() else {
+            return TokenExtraction::default();
+        };
 
-        match serde_json::from_str::<serde_json::Value>(content) {
-            Ok(val) => parse_gemini_json(&val, &now),
-            Err(e) => {
-                log::warn!("gemini-cli: JSON 解析失败: {}", e);
-                Vec::new()
-            }
+        TokenExtraction::from_logs(parse_gemini_content(content))
+    }
+}
+
+impl BehaviorExtractor for GeminiCliAdapter {}
+
+pub(crate) fn parse_gemini_content(content: &str) -> Vec<TokenLog> {
+    let now = chrono::Local::now()
+        .format("%Y-%m-%dT%H:%M:%S%:z")
+        .to_string();
+
+    match serde_json::from_str::<serde_json::Value>(content) {
+        Ok(val) => parse_gemini_json(&val, &now),
+        Err(e) => {
+            log::warn!("gemini-cli: JSON 解析失败: {}", e);
+            Vec::new()
         }
     }
 }
@@ -126,11 +141,21 @@ fn parse_gemini_json(val: &serde_json::Value, fallback_ts: &str) -> Vec<TokenLog
 mod tests {
     use super::*;
 
+    fn json_batch(content: &str) -> AgentDataBatch {
+        AgentDataBatch::JsonDocument {
+            agent_name: "gemini-cli".to_string(),
+            source_key: "chat.json".to_string(),
+            path: "chat.json".into(),
+            content: content.to_string(),
+            mtime: 0,
+        }
+    }
+
     #[test]
     fn test_parse_gemini_chat() {
         let json = r#"{"id":"chat-1","model":"gemini-2.5-pro","messages":[{"role":"user","content":"hi"},{"role":"model","tokens":{"promptTokenCount":100,"candidatesTokenCount":50}}]}"#;
         let adapter = GeminiCliAdapter;
-        let logs = adapter.parse_content(json);
+        let logs = adapter.extract_tokens(&json_batch(json)).logs;
         assert_eq!(logs.len(), 2);
         assert_eq!(logs[0].token_type, TokenType::Input);
         assert_eq!(logs[0].token_count, 100);
@@ -141,13 +166,13 @@ mod tests {
     fn test_skip_user_messages() {
         let json = r#"{"messages":[{"role":"user","tokens":{"promptTokenCount":100}}]}"#;
         let adapter = GeminiCliAdapter;
-        let logs = adapter.parse_content(json);
+        let logs = adapter.extract_tokens(&json_batch(json)).logs;
         assert!(logs.is_empty());
     }
 
     #[test]
     fn test_empty_content() {
         let adapter = GeminiCliAdapter;
-        assert!(adapter.parse_content("").is_empty());
+        assert!(adapter.extract_tokens(&json_batch("")).logs.is_empty());
     }
 }

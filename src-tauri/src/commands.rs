@@ -304,11 +304,7 @@ fn restart_watcher(state: &AppState) {
         .unwrap_or(defaults.keep_days);
     drop(conn);
 
-    let all = adapters::all_adapters();
-    let active_adapters: Vec<Box<dyn adapters::AgentAdapter>> = all
-        .into_iter()
-        .filter(|a| enabled_agents.contains(&a.agent_name().to_string()))
-        .collect();
+    let active_agents = adapters::filter_enabled_agents(adapters::all_agents(), &enabled_agents);
 
     let config = watcher::WatcherConfig {
         watch_mode,
@@ -322,7 +318,7 @@ fn restart_watcher(state: &AppState) {
 
     let write_tx = state.write_tx.lock().unwrap().clone();
     let new_watcher = watcher::WatcherEngine::start_monitoring(
-        active_adapters,
+        active_agents,
         write_tx,
         config,
         db_path_buf,
@@ -347,7 +343,7 @@ pub fn get_agent_list(state: State<AppState>) -> Result<Vec<AgentInfo>, String> 
     let conn = db::open_readonly(&db_path_from(&state)).map_err(|e| e.to_string())?;
     let enabled = db::queries::get_enabled_agents(&conn);
 
-    let all = adapters::all_adapters();
+    let all = adapters::all_agents();
     let agents =
         all.iter()
             .map(|a| {
@@ -408,12 +404,12 @@ pub fn toggle_agent(
     drop(conn);
 
     if enabled && changed {
-        let adapters: Vec<Box<dyn adapters::AgentAdapter>> = adapters::all_adapters()
+        let agents: Vec<Box<dyn adapters::AgentPipeline>> = adapters::all_agents()
             .into_iter()
             .filter(|a| a.agent_name() == agent_name)
             .collect();
         let write_tx = state.write_tx.lock().unwrap().clone();
-        watcher::catch_up_adapters(adapters, write_tx, keep_days, db_path_from(&state));
+        watcher::catch_up_adapters(agents, write_tx, keep_days, db_path_from(&state));
     }
 
     // Agent 变更后重启 Watcher

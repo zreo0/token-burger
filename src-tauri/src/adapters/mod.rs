@@ -5,7 +5,10 @@ pub mod opencode;
 
 use std::path::{Path, PathBuf};
 
+use crate::behavior::AgentBehaviorEvent;
+
 /// Agent 日志数据源类型
+#[derive(Debug, Clone)]
 pub enum DataSource {
     /// JSONL 文件，支持 offset 增量读取
     Jsonl { paths: Vec<PathBuf> },
@@ -45,33 +48,167 @@ pub struct TokenLog {
     pub timestamp: String,
 }
 
-/// Agent 适配器 Trait
-pub trait AgentAdapter: Send + Sync {
+/// 外部 SQLite 查询得到的最小 row
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SqliteMessageRow {
+    pub id: String,
+    pub session_id: Option<String>,
+    pub data: String,
+    pub time_created: i64,
+    pub watermark: i64,
+}
+
+/// 外部 SQLite source 的一次增量查询结果
+#[derive(Debug, Clone, Default)]
+pub struct SqliteRowBatch {
+    pub rows: Vec<SqliteMessageRow>,
+    pub high_watermark: Option<u64>,
+}
+
+/// Watcher 已读取的一批 Agent 数据
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub enum AgentDataBatch {
+    JsonlIncrement {
+        agent_name: String,
+        source_key: String,
+        path: PathBuf,
+        content: String,
+        token_context: Option<String>,
+        initial_model: Option<String>,
+        previous_offset: u64,
+        next_offset: u64,
+    },
+    JsonDocument {
+        agent_name: String,
+        source_key: String,
+        path: PathBuf,
+        content: String,
+        mtime: u64,
+    },
+    SqliteRows {
+        agent_name: String,
+        source_key: String,
+        db_path: PathBuf,
+        rows: Vec<SqliteMessageRow>,
+        previous_watermark: Option<u64>,
+        next_watermark: Option<u64>,
+    },
+}
+
+impl AgentDataBatch {
+    /// 读取 batch 所属的 Agent 名称
+    #[allow(dead_code)]
+    pub fn agent_name(&self) -> &str {
+        match self {
+            Self::JsonlIncrement { agent_name, .. }
+            | Self::JsonDocument { agent_name, .. }
+            | Self::SqliteRows { agent_name, .. } => agent_name,
+        }
+    }
+
+    /// 读取 batch 对应的 source key
+    pub fn source_key(&self) -> &str {
+        match self {
+            Self::JsonlIncrement { source_key, .. }
+            | Self::JsonDocument { source_key, .. }
+            | Self::SqliteRows { source_key, .. } => source_key,
+        }
+    }
+
+    /// 读取行为解析应消费的新增文本内容
+    pub fn behavior_content(&self) -> Option<&str> {
+        match self {
+            Self::JsonlIncrement { content, .. } => Some(content),
+            Self::JsonDocument { content, .. } => Some(content),
+            Self::SqliteRows { .. } => None,
+        }
+    }
+
+    /// 读取 token 解析应消费的文本内容
+    pub fn token_content(&self) -> Option<&str> {
+        match self {
+            Self::JsonlIncrement {
+                content,
+                token_context,
+                ..
+            } => token_context.as_deref().or(Some(content)),
+            Self::JsonDocument { content, .. } => Some(content),
+            Self::SqliteRows { .. } => None,
+        }
+    }
+}
+
+/// Token 解析输出
+#[derive(Debug, Clone, Default)]
+pub struct TokenExtraction {
+    pub logs: Vec<TokenLog>,
+    pub final_model: Option<String>,
+}
+
+impl TokenExtraction {
+    /// 从 token logs 创建一个无额外解析状态的输出
+    pub fn from_logs(logs: Vec<TokenLog>) -> Self {
+        Self {
+            logs,
+            final_model: None,
+        }
+    }
+}
+
+/// Agent 数据源描述 Trait
+pub trait AgentSource: Send + Sync {
     fn agent_name(&self) -> &str;
     fn data_source(&self) -> DataSource;
     /// 返回需要监听的日志路径模式列表（支持 glob）
     fn log_paths(&self) -> Vec<String>;
-    /// 解析文本内容（JSONL/JSON），返回统一的 Token 日志集合
-    fn parse_content(&self, content: &str) -> Vec<TokenLog>;
-    /// 查询外部 SQLite 数据库，since 为上次查询的源数据偏移量。
-    /// 返回日志与本次查询推进到的偏移量。
-    fn query_db(
+
+    /// 查询外部 SQLite 数据库，since 为上次查询的源数据水位线
+    fn query_sqlite_rows(
         &self,
         _db_path: &Path,
         _since: Option<u64>,
-    ) -> Result<(Vec<TokenLog>, Option<u64>), Box<dyn std::error::Error>> {
-        Err("此 Adapter 不支持 SQLite 查询".into())
+    ) -> Result<SqliteRowBatch, Box<dyn std::error::Error>> {
+        Err("此 Agent source 不支持 SQLite 查询".into())
     }
 }
 
-/// 创建所有内置 Adapter 实例
-pub fn all_adapters() -> Vec<Box<dyn AgentAdapter>> {
+/// Token 解析器 Trait
+pub trait TokenExtractor: Send + Sync {
+    fn extract_tokens(&self, batch: &AgentDataBatch) -> TokenExtraction;
+}
+
+/// 行为解析器 Trait
+pub trait BehaviorExtractor: Send + Sync {
+    fn extract_behavior(&self, _batch: &AgentDataBatch) -> Vec<AgentBehaviorEvent> {
+        Vec::new()
+    }
+}
+
+/// Agent source pipeline Trait
+pub trait AgentPipeline: AgentSource + TokenExtractor + BehaviorExtractor {}
+
+impl<T> AgentPipeline for T where T: AgentSource + TokenExtractor + BehaviorExtractor {}
+
+/// 创建所有内置 Agent pipeline 实例
+pub fn all_agents() -> Vec<Box<dyn AgentPipeline>> {
     vec![
         Box::new(claude_code::ClaudeCodeAdapter),
         Box::new(codex::CodexAdapter),
         Box::new(gemini_cli::GeminiCliAdapter),
         Box::new(opencode::OpenCodeAdapter),
     ]
+}
+
+/// 按设置过滤已启用的 Agent pipeline
+pub fn filter_enabled_agents(
+    agents: Vec<Box<dyn AgentPipeline>>,
+    enabled_agents: &[String],
+) -> Vec<Box<dyn AgentPipeline>> {
+    agents
+        .into_iter()
+        .filter(|agent| enabled_agents.contains(&agent.agent_name().to_string()))
+        .collect()
 }
 
 #[cfg(test)]
@@ -93,6 +230,19 @@ mod tests {
             metadata: None,
             cost: None,
             timestamp: "2026-04-18T10:00:00+08:00".into(),
+        }
+    }
+
+    fn jsonl_batch() -> AgentDataBatch {
+        AgentDataBatch::JsonlIncrement {
+            agent_name: "codex".into(),
+            source_key: "/tmp/session.jsonl".into(),
+            path: "/tmp/session.jsonl".into(),
+            content: "{}\n".into(),
+            token_context: None,
+            initial_model: Some("gpt-test".into()),
+            previous_offset: 1,
+            next_offset: 4,
         }
     }
 
@@ -160,5 +310,39 @@ mod tests {
             serde_json::from_str::<TokenType>("\"cache_create\"").unwrap(),
             TokenType::CacheCreate
         );
+    }
+
+    #[test]
+    fn agent_data_batch_exposes_source_key_and_content() {
+        let batch = jsonl_batch();
+
+        assert_eq!(batch.agent_name(), "codex");
+        assert_eq!(batch.source_key(), "/tmp/session.jsonl");
+        assert_eq!(batch.token_content(), Some("{}\n"));
+        assert_eq!(batch.behavior_content(), Some("{}\n"));
+    }
+
+    #[test]
+    fn sqlite_row_batch_defaults_to_empty() {
+        let batch = SqliteRowBatch::default();
+
+        assert!(batch.rows.is_empty());
+        assert_eq!(batch.high_watermark, None);
+    }
+
+    #[test]
+    fn unsupported_behavior_extractor_returns_empty_events() {
+        let extractor = gemini_cli::GeminiCliAdapter;
+
+        assert!(extractor.extract_behavior(&jsonl_batch()).is_empty());
+    }
+
+    #[test]
+    fn filter_enabled_agents_keeps_only_requested_sources() {
+        let enabled = vec!["codex".to_string()];
+        let agents = filter_enabled_agents(all_agents(), &enabled);
+
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].agent_name(), "codex");
     }
 }

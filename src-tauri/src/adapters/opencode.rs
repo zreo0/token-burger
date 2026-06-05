@@ -1,18 +1,14 @@
-use super::{AgentAdapter, DataSource, TokenLog, TokenType};
+use super::{
+    AgentDataBatch, AgentSource, BehaviorExtractor, DataSource, SqliteMessageRow, SqliteRowBatch,
+    TokenExtraction, TokenExtractor, TokenLog, TokenType,
+};
 use std::path::{Path, PathBuf};
 
-use crate::behavior::{self, AgentBehaviorEvent};
+use crate::behavior;
 
 pub struct OpenCodeAdapter;
 
-/// OpenCode SQLite 单次查询结果
-pub(crate) struct OpenCodeQueryBatch {
-    pub logs: Vec<TokenLog>,
-    pub behavior_events: Vec<AgentBehaviorEvent>,
-    pub high_watermark: Option<u64>,
-}
-
-impl AgentAdapter for OpenCodeAdapter {
+impl AgentSource for OpenCodeAdapter {
     fn agent_name(&self) -> &str {
         "opencode"
     }
@@ -43,44 +39,81 @@ impl AgentAdapter for OpenCodeAdapter {
         )]
     }
 
-    fn parse_content(&self, content: &str) -> Vec<TokenLog> {
-        // 旧版 JSON fallback 解析
-        let now = chrono::Local::now()
-            .format("%Y-%m-%dT%H:%M:%S%:z")
-            .to_string();
-
-        match serde_json::from_str::<serde_json::Value>(content) {
-            Ok(val) => parse_opencode_json(&val, &now),
-            Err(e) => {
-                log::warn!("opencode: JSON 解析失败: {}", e);
-                Vec::new()
-            }
-        }
-    }
-
-    fn query_db(
+    fn query_sqlite_rows(
         &self,
         db_path: &Path,
         since: Option<u64>,
-    ) -> Result<(Vec<TokenLog>, Option<u64>), Box<dyn std::error::Error>> {
-        let batch = query_db_batch(db_path, since, false)?;
-        Ok((batch.logs, batch.high_watermark))
+    ) -> Result<SqliteRowBatch, Box<dyn std::error::Error>> {
+        query_message_rows(db_path, since)
     }
 }
 
-/// 查询 OpenCode SQLite，并可从同一批 row 中解析行为事件
-pub(crate) fn query_db_batch(
+impl TokenExtractor for OpenCodeAdapter {
+    fn extract_tokens(&self, batch: &AgentDataBatch) -> TokenExtraction {
+        match batch {
+            AgentDataBatch::JsonDocument { content, .. }
+            | AgentDataBatch::JsonlIncrement { content, .. } => {
+                TokenExtraction::from_logs(parse_opencode_json_content(content))
+            }
+            AgentDataBatch::SqliteRows { rows, .. } => {
+                let fallback_ts = chrono::Local::now()
+                    .format("%Y-%m-%dT%H:%M:%S%:z")
+                    .to_string();
+                let logs = rows
+                    .iter()
+                    .flat_map(|row| parse_opencode_message_row(row, &fallback_ts))
+                    .collect();
+
+                TokenExtraction::from_logs(logs)
+            }
+        }
+    }
+}
+
+impl BehaviorExtractor for OpenCodeAdapter {
+    fn extract_behavior(&self, batch: &AgentDataBatch) -> Vec<crate::behavior::AgentBehaviorEvent> {
+        let AgentDataBatch::SqliteRows { rows, .. } = batch else {
+            return Vec::new();
+        };
+
+        rows.iter()
+            .filter_map(|row| {
+                let row = behavior::opencode::OpenCodeMessageRow {
+                    id: row.id.clone(),
+                    session_id: row.session_id.clone(),
+                    data: row.data.clone(),
+                    time_created: row.time_created,
+                };
+                behavior::opencode::parse_message_row(&row)
+            })
+            .collect()
+    }
+}
+
+/// 旧版 OpenCode JSON fallback 解析
+pub(crate) fn parse_opencode_json_content(content: &str) -> Vec<TokenLog> {
+    let now = chrono::Local::now()
+        .format("%Y-%m-%dT%H:%M:%S%:z")
+        .to_string();
+
+    match serde_json::from_str::<serde_json::Value>(content) {
+        Ok(val) => parse_opencode_json(&val, &now),
+        Err(e) => {
+            log::warn!("opencode: JSON 解析失败: {}", e);
+            Vec::new()
+        }
+    }
+}
+
+/// 查询 OpenCode SQLite message row
+pub(crate) fn query_message_rows(
     db_path: &Path,
     since: Option<u64>,
-    include_behavior: bool,
-) -> Result<OpenCodeQueryBatch, Box<dyn std::error::Error>> {
+) -> Result<SqliteRowBatch, Box<dyn std::error::Error>> {
     let conn =
         rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
 
     let watermark_column = opencode_watermark_column(&conn)?;
-    let now = chrono::Local::now()
-        .format("%Y-%m-%dT%H:%M:%S%:z")
-        .to_string();
     let since_ts = since.unwrap_or(0).min(i64::MAX as u64) as i64;
     let sql = format!(
         "SELECT id, session_id, data, time_created, {watermark_column} FROM message
@@ -90,50 +123,29 @@ pub(crate) fn query_db_batch(
     let mut stmt = conn.prepare(&sql)?;
 
     let rows = stmt.query_map(rusqlite::params![since_ts], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, Option<String>>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, i64>(3)?,
-            row.get::<_, i64>(4)?,
-        ))
+        Ok(SqliteMessageRow {
+            id: row.get::<_, String>(0)?,
+            session_id: row.get::<_, Option<String>>(1)?,
+            data: row.get::<_, String>(2)?,
+            time_created: row.get::<_, i64>(3)?,
+            watermark: row.get::<_, i64>(4)?,
+        })
     })?;
 
-    let mut logs = Vec::new();
-    let mut behavior_events = Vec::new();
+    let mut message_rows = Vec::new();
     let mut high_watermark = None;
 
     for row in rows {
-        let (msg_id, session_id, data_str, time_created, watermark) = row?;
-        if watermark >= 0 {
-            let ts = watermark as u64;
+        let row = row?;
+        if row.watermark >= 0 {
+            let ts = row.watermark as u64;
             high_watermark = Some(high_watermark.map_or(ts, |prev: u64| prev.max(ts)));
         }
-
-        if include_behavior {
-            let row = behavior::opencode::OpenCodeMessageRow {
-                id: msg_id.clone(),
-                session_id: session_id.clone(),
-                data: data_str.clone(),
-                time_created,
-            };
-            if let Some(event) = behavior::opencode::parse_message_row(&row) {
-                behavior_events.push(event);
-            }
-        }
-
-        logs.extend(parse_opencode_message_row(
-            &msg_id,
-            session_id,
-            &data_str,
-            time_created,
-            &now,
-        ));
+        message_rows.push(row);
     }
 
-    Ok(OpenCodeQueryBatch {
-        logs,
-        behavior_events,
+    Ok(SqliteRowBatch {
+        rows: message_rows,
         high_watermark,
     })
 }
@@ -151,22 +163,16 @@ fn opencode_watermark_column(conn: &rusqlite::Connection) -> Result<&'static str
     Ok("time_created")
 }
 
-fn parse_opencode_message_row(
-    msg_id: &str,
-    session_id: Option<String>,
-    data_str: &str,
-    time_created: i64,
-    fallback_ts: &str,
-) -> Vec<TokenLog> {
+fn parse_opencode_message_row(row: &SqliteMessageRow, fallback_ts: &str) -> Vec<TokenLog> {
     let mut logs = Vec::new();
-    let ts_str = chrono::DateTime::from_timestamp(time_created / 1000, 0)
+    let ts_str = chrono::DateTime::from_timestamp(row.time_created / 1000, 0)
         .map(|dt| {
             dt.with_timezone(&chrono::Local)
                 .format("%Y-%m-%dT%H:%M:%S%:z")
                 .to_string()
         })
         .unwrap_or_else(|| fallback_ts.to_string());
-    let Ok(data) = serde_json::from_str::<serde_json::Value>(data_str) else {
+    let Ok(data) = serde_json::from_str::<serde_json::Value>(&row.data) else {
         return logs;
     };
 
@@ -215,8 +221,8 @@ fn parse_opencode_message_row(
         model_id: model.clone(),
         token_type: tt,
         token_count: count,
-        session_id: session_id.clone(),
-        request_id: Some(format!("{}-{}", msg_id, suffix)),
+        session_id: row.session_id.clone(),
+        request_id: Some(format!("{}-{}", row.id, suffix)),
         latency_ms: None,
         is_error: false,
         metadata: None,
@@ -336,11 +342,32 @@ fn parse_opencode_json(val: &serde_json::Value, fallback_ts: &str) -> Vec<TokenL
 mod tests {
     use super::*;
 
+    fn json_batch(content: &str) -> AgentDataBatch {
+        AgentDataBatch::JsonDocument {
+            agent_name: "opencode".to_string(),
+            source_key: "message.json".to_string(),
+            path: "message.json".into(),
+            content: content.to_string(),
+            mtime: 0,
+        }
+    }
+
+    fn sqlite_batch(rows: Vec<SqliteMessageRow>, high_watermark: Option<u64>) -> AgentDataBatch {
+        AgentDataBatch::SqliteRows {
+            agent_name: "opencode".to_string(),
+            source_key: "sqlite:/tmp/opencode.db".to_string(),
+            db_path: "/tmp/opencode.db".into(),
+            rows,
+            previous_watermark: None,
+            next_watermark: high_watermark,
+        }
+    }
+
     #[test]
     fn test_parse_opencode_json() {
         let json = r#"{"id":"msg-1","modelID":"gemini-3-flash-preview","providerID":"quotio","tokens":{"input":500,"output":200,"cache":{"read":50,"write":30}}}"#;
         let adapter = OpenCodeAdapter;
-        let logs = adapter.parse_content(json);
+        let logs = adapter.extract_tokens(&json_batch(json)).logs;
         assert_eq!(logs.len(), 4);
         assert_eq!(logs[0].token_type, TokenType::Input);
         assert_eq!(logs[0].token_count, 500);
@@ -353,7 +380,7 @@ mod tests {
     fn test_parse_opencode_cost_only_on_input() {
         let json = r#"{"id":"msg-1","modelID":"gemini-3-flash-preview","providerID":"quotio","cost":0.12,"tokens":{"input":500,"output":200,"cache":{"read":50,"write":30}}}"#;
         let adapter = OpenCodeAdapter;
-        let logs = adapter.parse_content(json);
+        let logs = adapter.extract_tokens(&json_batch(json)).logs;
 
         assert_eq!(logs.len(), 4);
         assert_eq!(logs[0].cost, Some(0.12));
@@ -364,14 +391,14 @@ mod tests {
     fn test_no_tokens_field() {
         let json = r#"{"id":"msg-2","model":"test"}"#;
         let adapter = OpenCodeAdapter;
-        let logs = adapter.parse_content(json);
+        let logs = adapter.extract_tokens(&json_batch(json)).logs;
         assert!(logs.is_empty());
     }
 
     #[test]
     fn test_empty_content() {
         let adapter = OpenCodeAdapter;
-        assert!(adapter.parse_content("").is_empty());
+        assert!(adapter.extract_tokens(&json_batch("")).logs.is_empty());
     }
 
     #[test]
@@ -413,20 +440,28 @@ mod tests {
         drop(conn);
 
         let adapter = OpenCodeAdapter;
-        let (logs, high_watermark) = adapter.query_db(&db_path, Some(1000)).unwrap();
+        let rows = adapter.query_sqlite_rows(&db_path, Some(1000)).unwrap();
+        let high_watermark = rows.high_watermark;
+        let logs = adapter
+            .extract_tokens(&sqlite_batch(rows.rows, high_watermark))
+            .logs;
 
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].request_id.as_deref(), Some("new-input"));
         assert_eq!(logs[0].token_count, 2);
         assert_eq!(high_watermark, Some(2500));
 
-        let (logs, high_watermark) = adapter.query_db(&db_path, Some(2500)).unwrap();
+        let rows = adapter.query_sqlite_rows(&db_path, Some(2500)).unwrap();
+        let high_watermark = rows.high_watermark;
+        let logs = adapter
+            .extract_tokens(&sqlite_batch(rows.rows, high_watermark))
+            .logs;
         assert!(logs.is_empty());
         assert_eq!(high_watermark, None);
     }
 
     #[test]
-    fn test_query_db_batch_uses_time_updated_and_returns_behavior() {
+    fn test_query_sqlite_rows_uses_time_updated_and_extractors_share_rows() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("opencode.db");
         let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -454,11 +489,16 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let batch = query_db_batch(&db_path, Some(2500), true).unwrap();
+        let adapter = OpenCodeAdapter;
+        let row_batch = adapter.query_sqlite_rows(&db_path, Some(2500)).unwrap();
+        let high_watermark = row_batch.high_watermark;
+        let batch = sqlite_batch(row_batch.rows, high_watermark);
+        let logs = adapter.extract_tokens(&batch).logs;
+        let behavior_events = adapter.extract_behavior(&batch);
 
-        assert_eq!(batch.logs.len(), 1);
-        assert_eq!(batch.behavior_events.len(), 1);
-        assert_eq!(batch.high_watermark, Some(3000));
-        assert_eq!(batch.behavior_events[0].session_id, "session-1");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(behavior_events.len(), 1);
+        assert_eq!(high_watermark, Some(3000));
+        assert_eq!(behavior_events[0].session_id, "session-1");
     }
 }

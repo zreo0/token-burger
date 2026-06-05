@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
 
-use crate::adapters::{AgentAdapter, DataSource};
+use crate::adapters::{AgentDataBatch, AgentPipeline, DataSource};
 use crate::behavior::dispatcher::BehaviorDispatcher;
 use crate::db::WriteRequest;
 use crate::types::ColdStartProgress;
@@ -87,7 +87,7 @@ pub struct WatcherEngine {
 impl WatcherEngine {
     /// 启动 Watcher 引擎（冷启动 + 正常监听）
     pub fn start(
-        adapters: Vec<Box<dyn AgentAdapter>>,
+        agents: Vec<Box<dyn AgentPipeline>>,
         write_tx: Sender<WriteRequest>,
         app_handle: AppHandle,
         config: WatcherConfig,
@@ -102,18 +102,14 @@ impl WatcherEngine {
             // 阶段一：冷启动——解析历史数据
             cold_start_complete.store(false, Ordering::Release);
             let mut known_offsets = offset::load_offsets_from_db(&db_path);
-            let total = adapters.len() as u32;
-            log::info!(target: "token_burger::watcher", "冷启动开始: {} 个 adapter, 已知 {} 个文件 offset", total, known_offsets.len());
-            for (idx, adapter) in adapters.iter().enumerate() {
+            let total = agents.len() as u32;
+            log::info!(target: "token_burger::watcher", "冷启动开始: {} 个 agent source, 已知 {} 个文件 offset", total, known_offsets.len());
+            for (idx, agent) in agents.iter().enumerate() {
                 if flag.load(Ordering::Relaxed) {
                     return;
                 }
-                let updated_offsets = cold_start_adapter(
-                    adapter.as_ref(),
-                    &write_tx,
-                    config.keep_days,
-                    &known_offsets,
-                );
+                let updated_offsets =
+                    cold_start_adapter(agent.as_ref(), &write_tx, config.keep_days, &known_offsets);
                 for (key, offset) in updated_offsets {
                     known_offsets.insert(key, offset);
                 }
@@ -121,7 +117,7 @@ impl WatcherEngine {
                 let _ = app_handle.emit(
                     "cold-start-progress",
                     ColdStartProgress {
-                        agent: adapter.agent_name().to_string(),
+                        agent: agent.agent_name().to_string(),
                         done: true,
                         total,
                         completed: (idx + 1) as u32,
@@ -138,7 +134,7 @@ impl WatcherEngine {
 
             // 阶段二：正常监听模式
             start_watchers(
-                &adapters,
+                &agents,
                 &write_tx,
                 &flag,
                 &config,
@@ -156,7 +152,7 @@ impl WatcherEngine {
 
     /// 仅启动监听（跳过冷启动，用于设置变更后重启）
     pub fn start_monitoring(
-        adapters: Vec<Box<dyn AgentAdapter>>,
+        agents: Vec<Box<dyn AgentPipeline>>,
         write_tx: Sender<WriteRequest>,
         config: WatcherConfig,
         db_path: PathBuf,
@@ -168,7 +164,7 @@ impl WatcherEngine {
         let handle = thread::spawn(move || {
             let known_offsets = offset::load_offsets_from_db(&db_path);
             start_watchers(
-                &adapters,
+                &agents,
                 &write_tx,
                 &flag,
                 &config,
@@ -194,16 +190,16 @@ impl WatcherEngine {
 }
 
 pub fn catch_up_adapters(
-    adapters: Vec<Box<dyn AgentAdapter>>,
+    agents: Vec<Box<dyn AgentPipeline>>,
     write_tx: Sender<WriteRequest>,
     keep_days: u32,
     db_path: PathBuf,
 ) {
     thread::spawn(move || {
         let mut known_offsets = offset::load_offsets_from_db(&db_path);
-        for adapter in adapters {
+        for agent in agents {
             let updated_offsets =
-                cold_start_adapter(adapter.as_ref(), &write_tx, keep_days, &known_offsets);
+                cold_start_adapter(agent.as_ref(), &write_tx, keep_days, &known_offsets);
             for (key, offset) in updated_offsets {
                 known_offsets.insert(key, offset);
             }
@@ -213,101 +209,44 @@ pub fn catch_up_adapters(
 
 /// 冷启动：扫描单个 Adapter 的历史文件
 fn cold_start_adapter(
-    adapter: &dyn AgentAdapter,
+    agent: &dyn AgentPipeline,
     write_tx: &Sender<WriteRequest>,
     keep_days: u32,
     known_offsets: &std::collections::HashMap<String, u64>,
 ) -> Vec<(String, u64)> {
-    let mut updated_offsets = Vec::new();
-    let cutoff = chrono::Local::now() - chrono::Duration::days(keep_days as i64);
-    let cutoff_ts = cutoff.timestamp();
-    let agent = adapter.agent_name();
+    let agent_name = agent.agent_name();
 
-    match adapter.data_source() {
-        DataSource::Jsonl { paths } | DataSource::Json { paths } => {
-            let mut total_files = 0u32;
-            let mut total_records = 0u32;
-            let mut skipped_old = 0u32;
-            let mut skipped_known = 0u32;
-
-            for base_path in &paths {
-                for pattern in &adapter.log_paths() {
-                    let entries = match glob::glob(pattern) {
-                        Ok(e) => e,
-                        Err(e) => {
-                            log::warn!("[冷启动] {}: glob 模式错误 {}: {}", agent, pattern, e);
-                            continue;
-                        }
-                    };
-                    for entry in entries.flatten() {
-                        // mtime 过滤
-                        if let Ok(meta) = std::fs::metadata(&entry) {
-                            if let Ok(mtime) = meta.modified() {
-                                let mtime_ts = mtime
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs()
-                                    as i64;
-                                if mtime_ts < cutoff_ts {
-                                    skipped_old += 1;
-                                    continue;
-                                }
-                            }
-                            // offset 过滤：文件大小未变则跳过
-                            let path_str = entry.to_string_lossy().to_string();
-                            if let Some(&prev_offset) = known_offsets.get(&path_str) {
-                                if meta.len() <= prev_offset {
-                                    skipped_known += 1;
-                                    continue;
-                                }
-                            }
-                        }
-                        if let Ok(content) = std::fs::read_to_string(&entry) {
-                            let logs = adapter.parse_content(&content);
-                            let count = logs.len() as u32;
-                            total_files += 1;
-                            total_records += count;
-                            if !logs.is_empty() {
-                                let _ = write_tx.send(WriteRequest::InsertTokenLogs(logs));
-                            }
-
-                            // 冷启动完成后立即落盘 offset，避免下次启动重复扫描。
-                            if let Ok(meta) = std::fs::metadata(&entry) {
-                                let path_str = entry.to_string_lossy().to_string();
-                                let offset = meta.len();
-                                let _ = write_tx.send(WriteRequest::UpdateOffset {
-                                    file_path: path_str.clone(),
-                                    offset,
-                                });
-                                updated_offsets.push((path_str, offset));
-                            }
-                        }
-                    }
-                }
-                let _ = base_path;
-            }
-            log::info!(
-                "[冷启动] {} 完成: 扫描 {} 个文件, 解析 {} 条记录, 跳过 {} 个过期文件, 跳过 {} 个已处理文件",
-                agent,
-                total_files,
-                total_records,
-                skipped_old,
-                skipped_known
-            );
+    match agent.data_source() {
+        DataSource::Jsonl { paths } => {
+            cold_start_file_source(agent, write_tx, keep_days, known_offsets, paths, true)
+        }
+        DataSource::Json { paths } => {
+            cold_start_file_source(agent, write_tx, keep_days, known_offsets, paths, false)
         }
         DataSource::Sqlite { db_path } => {
+            let mut updated_offsets = Vec::new();
             if db_path.exists() {
                 let offset_key = sqlite_offset_key(&db_path);
                 let since = known_offsets.get(&offset_key).copied();
                 log::info!(
                     "[冷启动] {}: 查询外部 SQLite {} since={:?}",
-                    agent,
+                    agent_name,
                     db_path.display(),
                     since
                 );
-                match adapter.query_db(&db_path, since) {
-                    Ok((logs, high_watermark)) => {
-                        log::info!("[冷启动] {} 完成: {} 条记录", agent, logs.len());
+                match agent.query_sqlite_rows(&db_path, since) {
+                    Ok(row_batch) => {
+                        let high_watermark = row_batch.high_watermark;
+                        let batch = AgentDataBatch::SqliteRows {
+                            agent_name: agent_name.to_string(),
+                            source_key: offset_key.clone(),
+                            db_path: db_path.clone(),
+                            rows: row_batch.rows,
+                            previous_watermark: since,
+                            next_watermark: high_watermark,
+                        };
+                        let logs = agent.extract_tokens(&batch).logs;
+                        log::info!("[冷启动] {} 完成: {} 条记录", agent_name, logs.len());
                         let has_logs = !logs.is_empty();
                         match high_watermark {
                             Some(offset) if has_logs => {
@@ -335,20 +274,136 @@ fn cold_start_adapter(
                         }
                     }
                     Err(e) => {
-                        log::warn!("[冷启动] {}: SQLite 查询失败: {}", agent, e);
+                        log::warn!("[冷启动] {}: SQLite 查询失败: {}", agent_name, e);
                     }
                 }
             } else {
-                log::info!("[冷启动] {}: 数据库不存在, 跳过", agent);
+                log::info!("[冷启动] {}: 数据库不存在, 跳过", agent_name);
             }
+            updated_offsets
         }
     }
+}
+
+/// 冷启动文件类 source，并按 source 类型构建对应 batch
+fn cold_start_file_source(
+    agent: &dyn AgentPipeline,
+    write_tx: &Sender<WriteRequest>,
+    keep_days: u32,
+    known_offsets: &std::collections::HashMap<String, u64>,
+    paths: Vec<PathBuf>,
+    is_jsonl: bool,
+) -> Vec<(String, u64)> {
+    let mut updated_offsets = Vec::new();
+    let cutoff = chrono::Local::now() - chrono::Duration::days(keep_days as i64);
+    let cutoff_ts = cutoff.timestamp();
+    let agent_name = agent.agent_name();
+    let mut total_files = 0u32;
+    let mut total_records = 0u32;
+    let mut skipped_old = 0u32;
+    let mut skipped_known = 0u32;
+
+    for base_path in &paths {
+        for pattern in &agent.log_paths() {
+            let entries = match glob::glob(pattern) {
+                Ok(e) => e,
+                Err(e) => {
+                    log::warn!("[冷启动] {}: glob 模式错误 {}: {}", agent_name, pattern, e);
+                    continue;
+                }
+            };
+            for entry in entries.flatten() {
+                // mtime 过滤
+                if let Ok(meta) = std::fs::metadata(&entry) {
+                    if let Ok(mtime) = meta.modified() {
+                        let mtime_ts = mtime
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64;
+                        if mtime_ts < cutoff_ts {
+                            skipped_old += 1;
+                            continue;
+                        }
+                    }
+                    // offset 过滤：文件大小未变则跳过
+                    let path_str = entry.to_string_lossy().to_string();
+                    if let Some(&prev_offset) = known_offsets.get(&path_str) {
+                        if meta.len() <= prev_offset {
+                            skipped_known += 1;
+                            continue;
+                        }
+                    }
+                }
+                if let Ok(content) = std::fs::read_to_string(&entry) {
+                    let path_str = entry.to_string_lossy().to_string();
+                    let mtime = std::fs::metadata(&entry)
+                        .and_then(|meta| meta.modified())
+                        .ok()
+                        .and_then(|mtime| {
+                            mtime
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .ok()
+                                .map(|duration| duration.as_secs())
+                        })
+                        .unwrap_or_default();
+                    let batch = if is_jsonl {
+                        AgentDataBatch::JsonlIncrement {
+                            agent_name: agent_name.to_string(),
+                            source_key: path_str.clone(),
+                            path: entry.clone(),
+                            content,
+                            token_context: None,
+                            initial_model: None,
+                            previous_offset: 0,
+                            next_offset: std::fs::metadata(&entry)
+                                .map(|meta| meta.len())
+                                .unwrap_or_default(),
+                        }
+                    } else {
+                        AgentDataBatch::JsonDocument {
+                            agent_name: agent_name.to_string(),
+                            source_key: path_str.clone(),
+                            path: entry.clone(),
+                            content,
+                            mtime,
+                        }
+                    };
+                    let logs = agent.extract_tokens(&batch).logs;
+                    let count = logs.len() as u32;
+                    total_files += 1;
+                    total_records += count;
+                    if !logs.is_empty() {
+                        let _ = write_tx.send(WriteRequest::InsertTokenLogs(logs));
+                    }
+
+                    // 冷启动完成后立即落盘 offset，避免下次启动重复扫描。
+                    if let Ok(meta) = std::fs::metadata(&entry) {
+                        let offset = meta.len();
+                        let _ = write_tx.send(WriteRequest::UpdateOffset {
+                            file_path: path_str.clone(),
+                            offset,
+                        });
+                        updated_offsets.push((path_str, offset));
+                    }
+                }
+            }
+        }
+        let _ = base_path;
+    }
+    log::info!(
+        "[冷启动] {} 完成: 扫描 {} 个文件, 解析 {} 条记录, 跳过 {} 个过期文件, 跳过 {} 个已处理文件",
+        agent_name,
+        total_files,
+        total_records,
+        skipped_old,
+        skipped_known
+    );
     updated_offsets
 }
 
 /// 启动持续监听（各策略，根据 watch_mode 决定）
 fn start_watchers(
-    adapters: &[Box<dyn AgentAdapter>],
+    agents: &[Box<dyn AgentPipeline>],
     write_tx: &Sender<WriteRequest>,
     stop_flag: &Arc<AtomicBool>,
     config: &WatcherConfig,
@@ -357,16 +412,16 @@ fn start_watchers(
     behavior: Option<&BehaviorRuntime>,
 ) {
     // 分组
-    let mut jsonl_adapters: Vec<&dyn AgentAdapter> = Vec::new();
-    let mut json_adapters: Vec<&dyn AgentAdapter> = Vec::new();
-    let mut sqlite_adapters: Vec<(&dyn AgentAdapter, std::path::PathBuf)> = Vec::new();
+    let mut jsonl_agents: Vec<&dyn AgentPipeline> = Vec::new();
+    let mut json_agents: Vec<&dyn AgentPipeline> = Vec::new();
+    let mut sqlite_agents: Vec<(&dyn AgentPipeline, std::path::PathBuf)> = Vec::new();
 
-    for adapter in adapters {
-        match adapter.data_source() {
-            DataSource::Jsonl { .. } => jsonl_adapters.push(adapter.as_ref()),
-            DataSource::Json { .. } => json_adapters.push(adapter.as_ref()),
+    for agent in agents {
+        match agent.data_source() {
+            DataSource::Jsonl { .. } => jsonl_agents.push(agent.as_ref()),
+            DataSource::Json { .. } => json_agents.push(agent.as_ref()),
             DataSource::Sqlite { db_path } => {
-                sqlite_adapters.push((adapter.as_ref(), db_path));
+                sqlite_agents.push((agent.as_ref(), db_path));
             }
         }
     }
@@ -375,21 +430,21 @@ fn start_watchers(
     let poll_secs = config.polling_interval_secs;
 
     // JSONL 文件：realtime 用 notify，polling 用定时轮询
-    if !jsonl_adapters.is_empty() {
+    if !jsonl_agents.is_empty() {
         let tx = write_tx.clone();
         let flag = stop_flag.clone();
-        let adapter_names: Vec<String> = jsonl_adapters
+        let agent_names: Vec<String> = jsonl_agents
             .iter()
             .map(|a| a.agent_name().to_string())
             .collect();
-        let log_patterns: Vec<Vec<String>> = jsonl_adapters.iter().map(|a| a.log_paths()).collect();
+        let log_patterns: Vec<Vec<String>> = jsonl_agents.iter().map(|a| a.log_paths()).collect();
 
         if is_realtime {
             let initial_offsets = known_offsets.clone();
             let behavior_runtime = behavior.cloned();
             thread::spawn(move || {
                 notify_strategy::run_notify_polling(
-                    adapter_names,
+                    agent_names,
                     log_patterns,
                     tx,
                     flag,
@@ -401,7 +456,7 @@ fn start_watchers(
             let behavior_runtime = behavior.cloned();
             thread::spawn(move || {
                 polling_strategy::run_polling(
-                    adapter_names,
+                    agent_names,
                     log_patterns,
                     tx,
                     flag,
@@ -413,19 +468,19 @@ fn start_watchers(
     }
 
     // JSON 文件：始终用 polling
-    if !json_adapters.is_empty() {
+    if !json_agents.is_empty() {
         let tx = write_tx.clone();
         let flag = stop_flag.clone();
-        let adapter_names: Vec<String> = json_adapters
+        let agent_names: Vec<String> = json_agents
             .iter()
             .map(|a| a.agent_name().to_string())
             .collect();
-        let log_patterns: Vec<Vec<String>> = json_adapters.iter().map(|a| a.log_paths()).collect();
+        let log_patterns: Vec<Vec<String>> = json_agents.iter().map(|a| a.log_paths()).collect();
 
         let behavior_runtime = behavior.cloned();
         thread::spawn(move || {
             polling_strategy::run_polling(
-                adapter_names,
+                agent_names,
                 log_patterns,
                 tx,
                 flag,
@@ -436,12 +491,12 @@ fn start_watchers(
     }
 
     // SQLite 策略
-    for (adapter, adapter_db_path) in &sqlite_adapters {
+    for (agent, adapter_db_path) in &sqlite_agents {
         if adapter_db_path.exists() {
             let tx = write_tx.clone();
             let flag = stop_flag.clone();
             let dp = adapter_db_path.clone();
-            let name = adapter.agent_name().to_string();
+            let name = agent.agent_name().to_string();
             let initial_offset = known_offsets
                 .get(&sqlite_offset_key(adapter_db_path))
                 .copied();
@@ -470,7 +525,48 @@ fn start_watchers(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::{AgentSource, BehaviorExtractor, TokenExtraction, TokenExtractor};
     use std::io::Write;
+    use std::sync::atomic::AtomicUsize;
+
+    struct ColdStartCountingAgent {
+        pattern: String,
+        token_calls: Arc<AtomicUsize>,
+        behavior_calls: Arc<AtomicUsize>,
+    }
+
+    impl AgentSource for ColdStartCountingAgent {
+        fn agent_name(&self) -> &str {
+            "counting"
+        }
+
+        fn data_source(&self) -> DataSource {
+            DataSource::Jsonl {
+                paths: vec![PathBuf::from(".")],
+            }
+        }
+
+        fn log_paths(&self) -> Vec<String> {
+            vec![self.pattern.clone()]
+        }
+    }
+
+    impl TokenExtractor for ColdStartCountingAgent {
+        fn extract_tokens(&self, _batch: &AgentDataBatch) -> TokenExtraction {
+            self.token_calls.fetch_add(1, Ordering::Relaxed);
+            TokenExtraction::default()
+        }
+    }
+
+    impl BehaviorExtractor for ColdStartCountingAgent {
+        fn extract_behavior(
+            &self,
+            _batch: &AgentDataBatch,
+        ) -> Vec<crate::behavior::AgentBehaviorEvent> {
+            self.behavior_calls.fetch_add(1, Ordering::Relaxed);
+            Vec::new()
+        }
+    }
 
     #[test]
     fn test_stop_flag_basic() {
@@ -487,6 +583,29 @@ mod tests {
         assert!(!complete.load(Ordering::Acquire));
         mark_cold_start_complete(&complete);
         assert!(complete.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn cold_start_adapter_extracts_tokens_without_behavior_fan_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, "{}\n").unwrap();
+
+        let token_calls = Arc::new(AtomicUsize::new(0));
+        let behavior_calls = Arc::new(AtomicUsize::new(0));
+        let agent = ColdStartCountingAgent {
+            pattern: path.to_string_lossy().to_string(),
+            token_calls: token_calls.clone(),
+            behavior_calls: behavior_calls.clone(),
+        };
+        let (write_tx, _write_rx) = std::sync::mpsc::channel();
+
+        let updated_offsets =
+            cold_start_adapter(&agent, &write_tx, 365, &std::collections::HashMap::new());
+
+        assert_eq!(updated_offsets.len(), 1);
+        assert_eq!(token_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(behavior_calls.load(Ordering::Relaxed), 0);
     }
 
     // --- offset 断点续传 ---

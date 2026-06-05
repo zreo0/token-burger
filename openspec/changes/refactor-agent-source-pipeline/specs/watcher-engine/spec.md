@@ -1,0 +1,109 @@
+## MODIFIED Requirements
+
+### Requirement: 统一调度器
+WatcherEngine SHALL 作为单独的后台线程运行，接收所有已启用 Agent source 的注册，根据每个 source 的数据源类型自动分发到对应的读取策略（Notify / Polling / SQLite）。读取策略 SHALL 生成 `AgentDataBatch` 或等价内部 batch，并将同一批 batch fan-out 给 Token extractor 与可选 Behavior extractor。WatcherEngine MUST 继续尊重 Settings 中的 Agent 启用状态。
+
+#### Scenario: 启动时注册 source
+- **WHEN** 系统启动并完成冷启动
+- **THEN** WatcherEngine 遍历所有启用的 Agent source，按数据源类型分组，启动对应的监听策略
+
+#### Scenario: Agent 动态启用/禁用
+- **WHEN** 用户在 Settings 中禁用某个 Agent
+- **THEN** WatcherEngine 停止该 Agent 的监听、Token 解析和行为解析，不影响其他 Agent
+
+#### Scenario: 同批 fan-out
+- **WHEN** 某个已启用 Agent 产生新增数据
+- **THEN** WatcherEngine 只读取一次该新增数据，并将同一 batch 分发给 token 和行为消费者
+
+### Requirement: Notify 策略（JSONL 文件）
+系统 SHALL 使用 `notify-debouncer-full` 监听 JSONL 类型的日志目录，debounce 间隔 MUST 为 500ms。监听模式为 `RecursiveMode::Recursive`，仅处理 `.jsonl` 扩展名的文件变更事件。文件变更后，策略 SHALL 从记录的 offset 读取新增内容，生成 JSONL 增量 batch，并由 watcher 分发给解析消费者。
+
+#### Scenario: 文件内容变更触发 batch
+- **WHEN** Claude Code 或 Codex 的 JSONL 文件被追加写入
+- **THEN** 500ms debounce 后，系统读取增量内容，生成 batch，并调用对应 Token extractor
+
+#### Scenario: 高频写入合并
+- **WHEN** Agent 在 200ms 内连续写入 10 次
+- **THEN** 系统仅触发一次解析（500ms debounce 合并）
+
+#### Scenario: 非目标文件过滤
+- **WHEN** 监听目录中出现 `.json` 或 `.log` 文件变更
+- **THEN** 系统忽略该事件
+
+#### Scenario: Codex 行为同源解析
+- **WHEN** Codex JSONL 增量 batch 在正常监听阶段生成且行为提示开启
+- **THEN** 系统从同一 batch 同时执行 token 解析和行为解析
+
+### Requirement: Polling 策略（JSON 文件）
+系统 SHALL 以可配置的间隔（默认 10 秒）轮询 JSON 类型的日志目录，通过比对文件 mtime 判断是否有变更。变更的文件 SHALL 全量读取为 JSON batch，并由 watcher 分发给解析消费者。
+
+#### Scenario: mtime 变更触发 batch
+- **WHEN** 轮询检测到某 JSON 文件的 mtime 大于上次记录
+- **THEN** 全量读取该文件，生成 batch，并调用对应 Token extractor
+
+#### Scenario: mtime 未变不解析
+- **WHEN** 轮询检测到文件 mtime 未变
+- **THEN** 跳过该文件
+
+### Requirement: SQLite 策略（外部数据库）
+系统 SHALL 以可配置的间隔（默认 10 秒）查询外部 SQLite 数据库，使用 source 定义的 watermark 字段进行增量查询。查询结果 SHALL 被封装为 SQLite row batch，并由 watcher 分发给 Token extractor 与可选 Behavior extractor。
+
+#### Scenario: 增量查询新 row
+- **WHEN** 定时查询触发且有新 row
+- **THEN** 系统生成 SQLite row batch，调用对应解析器，并在处理成功后推进 watermark
+
+#### Scenario: 外部数据库不可访问
+- **WHEN** 外部 SQLite 文件被锁定或不存在
+- **THEN** 记录 warn 日志，跳过本轮查询，下次重试
+
+#### Scenario: OpenCode 单查询 fan-out
+- **WHEN** OpenCode SQLite 查询返回新的 message row
+- **THEN** 系统使用同一批 row 执行 token 解析和行为解析，不启动独立行为轮询
+
+### Requirement: 冷启动编排
+系统首次启动时 SHALL 进入冷启动模式：逐 Agent 在后台线程解析历史日志，按 mtime 或 source watermark 过滤最近 N 天（默认 30 天，可配置）的数据。每完成一个 Agent MUST 通过 `emit("cold-start-progress", ...)` 广播进度。系统 MUST 维护可靠的冷启动完成状态；全部完成后 MUST 标记冷启动完成，并切换到正常监听模式。冷启动期间 SHALL 只执行 token 解析，不得产生行为提示。
+
+#### Scenario: 冷启动进度广播
+- **WHEN** 冷启动完成 Claude Code 的历史解析
+- **THEN** 系统 emit `cold-start-progress` 事件，payload 包含 `{ agent: "claude-code", done: true, total: 5, completed: 1 }`
+
+#### Scenario: 冷启动 mtime 过滤
+- **WHEN** `~/.claude/projects/` 下有 90 天前的 JSONL 文件
+- **THEN** 系统跳过该文件（超出 30 天保留期）
+
+#### Scenario: 增量可用
+- **WHEN** Claude Code 冷启动完成但 Codex 尚未开始
+- **THEN** 数据可以入库并参与后续汇总，但主托盘 token title 不得把该部分数据展示为最终完成状态
+
+#### Scenario: 冷启动完成状态
+- **WHEN** 所有启用 Agent 的冷启动解析都已完成
+- **THEN** 系统标记冷启动完成，并允许主托盘恢复正常 token 汇总展示与 Popup 打开行为
+
+#### Scenario: 无启用 Agent
+- **WHEN** 冷启动开始时没有任何启用 Agent 需要扫描
+- **THEN** 系统立即标记冷启动完成，并进入正常监听模式
+
+#### Scenario: 冷启动不分发行为
+- **WHEN** 冷启动读取到 Codex 权限请求或 OpenCode 完成记录
+- **THEN** 系统只补录 token 数据，不生成、不入队、不展示行为提示
+
+## ADDED Requirements
+
+### Requirement: 重构兼容性保护
+WatcherEngine 重构 SHALL 不改变用户可见统计行为。Token 入库、`token-updated` 广播、tray title、Popup 查询、Settings Agent 开关和行为提示总开关 MUST 保持与重构前等价。
+
+#### Scenario: 入库广播保持不变
+- **WHEN** 写线程完成一批 TokenLog 的插入
+- **THEN** 系统仍查询今日汇总、emit `token-updated` 事件并更新 tray title
+
+#### Scenario: 行为提示关闭不解析
+- **WHEN** 行为提示总开关关闭且 Agent 产生新增数据
+- **THEN** watcher 仍执行 token 解析，但不调用 Behavior extractor
+
+#### Scenario: Agent 关闭不监听
+- **WHEN** 用户关闭某 Agent
+- **THEN** watcher 不为该 Agent 启动 source 读取、token 解析或行为解析
+
+#### Scenario: 前端接口不变
+- **WHEN** 前端调用现有 Tauri command 或监听现有事件
+- **THEN** command 名称、事件名称和 payload 结构保持不变

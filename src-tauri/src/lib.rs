@@ -258,12 +258,9 @@ pub fn run() {
             // 克隆 write_tx 供 AppState 和 Watcher 分别使用
             let write_tx_for_state = db_manager.write_tx.clone();
 
-            // 启动 Watcher 引擎（只启动已启用的 adapter）
-            let all = adapters::all_adapters();
-            let active_adapters: Vec<Box<dyn adapters::AgentAdapter>> = all
-                .into_iter()
-                .filter(|a| enabled_agents.contains(&a.agent_name().to_string()))
-                .collect();
+            // 启动 Watcher 引擎（只启动已启用的 Agent source）
+            let active_agents =
+                adapters::filter_enabled_agents(adapters::all_agents(), &enabled_agents);
             let watcher_config = watcher::WatcherConfig {
                 watch_mode,
                 polling_interval_secs,
@@ -274,7 +271,7 @@ pub fn run() {
                 dispatcher: behavior.clone(),
             });
             let watcher_engine = watcher::WatcherEngine::start(
-                active_adapters,
+                active_agents,
                 db_manager.write_tx,
                 app.handle().clone(),
                 watcher_config,

@@ -9,14 +9,14 @@ use std::time::Duration;
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebouncedEvent};
 
-use crate::adapters::{all_adapters, codex};
-use crate::behavior;
+use crate::adapters::{all_agents, AgentDataBatch, AgentPipeline};
+use crate::behavior::dispatcher::BehaviorDispatcher;
 use crate::db::WriteRequest;
 use crate::watcher::BehaviorRuntime;
 
 struct PathChangeContext<'a> {
-    adapter_names: &'a [String],
-    adapters: &'a [Box<dyn crate::adapters::AgentAdapter>],
+    agent_names: &'a [String],
+    agents: &'a [Box<dyn AgentPipeline>],
     path_to_adapter: &'a HashMap<String, usize>,
     write_tx: &'a Sender<WriteRequest>,
     behavior: Option<BehaviorRuntime>,
@@ -40,7 +40,7 @@ pub fn run_notify_polling(
     // path → file size（用于增量读取），初始化时优先使用 DB 中的 offset
     let mut file_offsets: HashMap<String, u64> = initial_offsets;
     let mut codex_model_cache: HashMap<String, String> = HashMap::new();
-    let adapters = all_adapters();
+    let agents = all_agents();
 
     // 设置 debouncer 通道
     let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<DebouncedEvent>, Vec<notify::Error>>>();
@@ -112,7 +112,7 @@ pub fn run_notify_polling(
                 process_events(
                     &events,
                     &adapter_names,
-                    &adapters,
+                    &agents,
                     &path_to_adapter,
                     &mut file_offsets,
                     &mut codex_model_cache,
@@ -140,7 +140,7 @@ pub fn run_notify_polling(
                     }
                     reconcile_registered_paths(
                         &adapter_names,
-                        &adapters,
+                        &agents,
                         &path_to_adapter,
                         &mut file_offsets,
                         &mut codex_model_cache,
@@ -161,8 +161,8 @@ pub fn run_notify_polling(
 /// 处理 debounced 文件变化事件
 fn process_events(
     events: &[DebouncedEvent],
-    adapter_names: &[String],
-    adapters: &[Box<dyn crate::adapters::AgentAdapter>],
+    agent_names: &[String],
+    agents: &[Box<dyn AgentPipeline>],
     path_to_adapter: &HashMap<String, usize>,
     file_offsets: &mut HashMap<String, u64>,
     codex_model_cache: &mut HashMap<String, String>,
@@ -170,8 +170,8 @@ fn process_events(
     behavior: Option<BehaviorRuntime>,
 ) {
     let context = PathChangeContext {
-        adapter_names,
-        adapters,
+        agent_names,
+        agents,
         path_to_adapter,
         write_tx,
         behavior,
@@ -193,8 +193,8 @@ fn process_events(
 }
 
 fn reconcile_registered_paths(
-    adapter_names: &[String],
-    adapters: &[Box<dyn crate::adapters::AgentAdapter>],
+    agent_names: &[String],
+    agents: &[Box<dyn AgentPipeline>],
     path_to_adapter: &HashMap<String, usize>,
     file_offsets: &mut HashMap<String, u64>,
     codex_model_cache: &mut HashMap<String, String>,
@@ -202,8 +202,8 @@ fn reconcile_registered_paths(
     behavior: Option<BehaviorRuntime>,
 ) {
     let context = PathChangeContext {
-        adapter_names,
-        adapters,
+        agent_names,
+        agents,
         path_to_adapter,
         write_tx,
         behavior,
@@ -234,12 +234,8 @@ fn process_path_change(
         Some(idx) => *idx,
         None => return,
     };
-    let agent_name = &context.adapter_names[adapter_idx];
-    let adapter = match context
-        .adapters
-        .iter()
-        .find(|a| a.agent_name() == agent_name)
-    {
+    let agent_name = &context.agent_names[adapter_idx];
+    let agent = match context.agents.iter().find(|a| a.agent_name() == agent_name) {
         Some(a) => a,
         None => return,
     };
@@ -273,13 +269,21 @@ fn process_path_change(
                 return;
             }
         };
-        let logs = if agent_name == "codex" {
-            let parsed = codex::parse_content_with_model(&content, codex::DEFAULT_CODEX_MODEL);
-            codex_model_cache.insert(path_str.to_string(), parsed.final_model);
-            parsed.logs
-        } else {
-            adapter.parse_content(&content)
+        let batch = AgentDataBatch::JsonlIncrement {
+            agent_name: agent_name.to_string(),
+            source_key: path_str.to_string(),
+            path: path.to_path_buf(),
+            content,
+            token_context: None,
+            initial_model: None,
+            previous_offset: 0,
+            next_offset: new_size,
         };
+        let extraction = agent.extract_tokens(&batch);
+        if let Some(final_model) = extraction.final_model {
+            codex_model_cache.insert(path_str.to_string(), final_model);
+        }
+        let logs = extraction.logs;
         if !logs.is_empty() {
             log::info!(
                 "[{}] {}: 解析 {} 条记录 (轮转重读)",
@@ -289,7 +293,7 @@ fn process_path_change(
             );
             let _ = context.write_tx.send(WriteRequest::InsertTokenLogs(logs));
         }
-        dispatch_behavior_events(agent_name, path_str, &content, &context.behavior);
+        dispatch_behavior_events(agent.as_ref(), &batch, &context.behavior);
         file_offsets.insert(path_str.to_string(), new_size);
         let _ = context.write_tx.send(WriteRequest::UpdateOffset {
             file_path: path_str.to_string(),
@@ -302,27 +306,25 @@ fn process_path_change(
         return;
     }
 
-    let parsed = match parse_changed_content(
-        path,
-        path_str,
-        prev_offset,
-        agent_name,
-        adapter.as_ref(),
-        codex_model_cache,
-    ) {
-        Ok(parsed) => parsed,
-        Err(err) => {
-            log::warn!(
-                "[{}] {}: 增量读取失败，保留 offset {}: {}",
-                source,
-                agent_name,
-                prev_offset,
-                err
-            );
-            return;
-        }
-    };
-    let logs = parsed.logs;
+    let batch =
+        match build_changed_batch(path, path_str, prev_offset, agent_name, codex_model_cache) {
+            Ok(batch) => batch,
+            Err(err) => {
+                log::warn!(
+                    "[{}] {}: 增量读取失败，保留 offset {}: {}",
+                    source,
+                    agent_name,
+                    prev_offset,
+                    err
+                );
+                return;
+            }
+        };
+    let extraction = agent.extract_tokens(&batch);
+    if let Some(final_model) = extraction.final_model {
+        codex_model_cache.insert(path_str.to_string(), final_model);
+    }
+    let logs = extraction.logs;
     if !logs.is_empty() {
         let total_tokens: i64 = logs.iter().map(|l| l.token_count).sum();
         let models: Vec<&str> = logs
@@ -343,12 +345,7 @@ fn process_path_change(
         );
         let _ = context.write_tx.send(WriteRequest::InsertTokenLogs(logs));
     }
-    dispatch_behavior_events(
-        agent_name,
-        path_str,
-        &parsed.behavior_content,
-        &context.behavior,
-    );
+    dispatch_behavior_events(agent.as_ref(), &batch, &context.behavior);
     file_offsets.insert(path_str.to_string(), new_size);
     let _ = context.write_tx.send(WriteRequest::UpdateOffset {
         file_path: path_str.to_string(),
@@ -356,57 +353,80 @@ fn process_path_change(
     });
 }
 
-fn parse_changed_content(
+fn build_changed_batch(
     path: &std::path::Path,
     path_str: &str,
     prev_offset: u64,
     agent_name: &str,
-    adapter: &dyn crate::adapters::AgentAdapter,
     codex_model_cache: &mut HashMap<String, String>,
-) -> std::io::Result<ParsedFileBatch> {
+) -> std::io::Result<AgentDataBatch> {
+    let next_offset = std::fs::metadata(path)?.len();
     if agent_name != "codex" {
         let content = read_from_offset(path, prev_offset)?;
-        return Ok(ParsedFileBatch {
-            logs: adapter.parse_content(&content),
-            behavior_content: content,
+        return Ok(AgentDataBatch::JsonlIncrement {
+            agent_name: agent_name.to_string(),
+            source_key: path_str.to_string(),
+            path: path.to_path_buf(),
+            content,
+            token_context: None,
+            initial_model: None,
+            previous_offset: prev_offset,
+            next_offset,
         });
     }
 
     let behavior_content = read_from_offset(path, prev_offset)?;
-    let (token_content, initial_model) = match codex_model_cache.get(path_str) {
-        Some(model) => (behavior_content.clone(), model.as_str()),
-        None => (std::fs::read_to_string(path)?, codex::DEFAULT_CODEX_MODEL),
+    let (token_context, initial_model) = match codex_model_cache.get(path_str) {
+        Some(model) => (None, Some(model.clone())),
+        None => (
+            Some(std::fs::read_to_string(path)?),
+            Some(crate::adapters::codex::DEFAULT_CODEX_MODEL.to_string()),
+        ),
     };
 
-    let parsed = codex::parse_content_with_model(&token_content, initial_model);
-    codex_model_cache.insert(path_str.to_string(), parsed.final_model);
-
-    Ok(ParsedFileBatch {
-        logs: parsed.logs,
-        behavior_content,
+    Ok(AgentDataBatch::JsonlIncrement {
+        agent_name: agent_name.to_string(),
+        source_key: path_str.to_string(),
+        path: path.to_path_buf(),
+        content: behavior_content,
+        token_context,
+        initial_model,
+        previous_offset: prev_offset,
+        next_offset,
     })
 }
 
-struct ParsedFileBatch {
-    logs: Vec<crate::adapters::TokenLog>,
-    behavior_content: String,
-}
-
 fn dispatch_behavior_events(
-    agent_name: &str,
-    path_str: &str,
-    content: &str,
+    agent: &dyn AgentPipeline,
+    batch: &AgentDataBatch,
     behavior: &Option<BehaviorRuntime>,
 ) {
     let Some(runtime) = behavior else {
         return;
     };
-    if !runtime.is_enabled() || agent_name != "codex" {
-        return;
-    }
+    dispatch_behavior_events_if_enabled(
+        agent,
+        batch,
+        runtime.is_enabled(),
+        Some(&runtime.dispatcher),
+    );
+}
 
-    for event in behavior::codex::parse_events(content, path_str) {
-        runtime.dispatcher.handle_event(event);
+fn dispatch_behavior_events_if_enabled(
+    agent: &dyn AgentPipeline,
+    batch: &AgentDataBatch,
+    enabled: bool,
+    dispatcher: Option<&Arc<BehaviorDispatcher>>,
+) {
+    if !enabled {
+        return;
+    };
+    let Some(dispatcher) = dispatcher else {
+        return;
+    };
+
+    for event in agent.extract_behavior(batch) {
+        dispatcher.handle_event(event);
     }
 }
 
@@ -424,7 +444,85 @@ pub(crate) fn read_from_offset(path: &std::path::Path, offset: u64) -> std::io::
 mod tests {
     use super::*;
     use crate::adapters::codex::CodexAdapter;
+    use crate::adapters::{
+        AgentSource, BehaviorExtractor, DataSource, TokenExtraction, TokenExtractor,
+    };
     use std::io::Write;
+    use std::sync::atomic::AtomicUsize;
+
+    fn extract_codex_logs(
+        adapter: &CodexAdapter,
+        batch: &AgentDataBatch,
+        cache: &mut HashMap<String, String>,
+    ) -> Vec<crate::adapters::TokenLog> {
+        let extraction = adapter.extract_tokens(batch);
+        if let Some(final_model) = extraction.final_model {
+            cache.insert(batch.source_key().to_string(), final_model);
+        }
+        extraction.logs
+    }
+
+    struct CountingBehaviorAgent {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl AgentSource for CountingBehaviorAgent {
+        fn agent_name(&self) -> &str {
+            "counting"
+        }
+
+        fn data_source(&self) -> DataSource {
+            DataSource::Jsonl { paths: Vec::new() }
+        }
+
+        fn log_paths(&self) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    impl TokenExtractor for CountingBehaviorAgent {
+        fn extract_tokens(&self, _batch: &AgentDataBatch) -> TokenExtraction {
+            TokenExtraction::default()
+        }
+    }
+
+    impl BehaviorExtractor for CountingBehaviorAgent {
+        fn extract_behavior(
+            &self,
+            _batch: &AgentDataBatch,
+        ) -> Vec<crate::behavior::AgentBehaviorEvent> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Vec::new()
+        }
+    }
+
+    fn behavior_test_batch() -> AgentDataBatch {
+        AgentDataBatch::JsonlIncrement {
+            agent_name: "counting".to_string(),
+            source_key: "/tmp/counting.jsonl".to_string(),
+            path: "/tmp/counting.jsonl".into(),
+            content: "{}\n".to_string(),
+            token_context: None,
+            initial_model: None,
+            previous_offset: 0,
+            next_offset: 3,
+        }
+    }
+
+    #[test]
+    fn behavior_dispatch_skips_extractor_when_runtime_missing_or_disabled() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let agent = CountingBehaviorAgent {
+            calls: calls.clone(),
+        };
+        let batch = behavior_test_batch();
+
+        dispatch_behavior_events(&agent, &batch, &None);
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+
+        dispatch_behavior_events_if_enabled(&agent, &batch, false, None);
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
 
     #[test]
     fn codex_cache_miss_recovers_model_then_incremental_uses_cache() {
@@ -438,16 +536,10 @@ mod tests {
         let adapter = CodexAdapter;
         let mut cache = HashMap::new();
 
-        let parsed = parse_changed_content(
-            &path,
-            &path_str,
-            initial.len() as u64,
-            "codex",
-            &adapter,
-            &mut cache,
-        )
-        .unwrap();
-        let logs = parsed.logs;
+        let batch =
+            build_changed_batch(&path, &path_str, initial.len() as u64, "codex", &mut cache)
+                .unwrap();
+        let logs = extract_codex_logs(&adapter, &batch, &mut cache);
 
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].model_id, "gpt-5.4");
@@ -461,16 +553,10 @@ mod tests {
 "#;
         file.write_all(incremental.as_bytes()).unwrap();
 
-        let parsed = parse_changed_content(
-            &path,
-            &path_str,
-            initial.len() as u64,
-            "codex",
-            &adapter,
-            &mut cache,
-        )
-        .unwrap();
-        let logs = parsed.logs;
+        let batch =
+            build_changed_batch(&path, &path_str, initial.len() as u64, "codex", &mut cache)
+                .unwrap();
+        let logs = extract_codex_logs(&adapter, &batch, &mut cache);
 
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].model_id, "gpt-5.4");
@@ -497,16 +583,10 @@ mod tests {
 "#;
         file.write_all(incremental.as_bytes()).unwrap();
 
-        let parsed = parse_changed_content(
-            &path,
-            &path_str,
-            initial.len() as u64,
-            "codex",
-            &adapter,
-            &mut cache,
-        )
-        .unwrap();
-        let logs = parsed.logs;
+        let batch =
+            build_changed_batch(&path, &path_str, initial.len() as u64, "codex", &mut cache)
+                .unwrap();
+        let logs = extract_codex_logs(&adapter, &batch, &mut cache);
 
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].model_id, "gpt-5.5");
@@ -532,7 +612,7 @@ mod tests {
         file.flush().unwrap();
 
         let adapter_names = vec!["codex".to_string()];
-        let adapters: Vec<Box<dyn crate::adapters::AgentAdapter>> = vec![Box::new(CodexAdapter)];
+        let adapters: Vec<Box<dyn crate::adapters::AgentPipeline>> = vec![Box::new(CodexAdapter)];
         let path_to_adapter = HashMap::from([(path_str.clone(), 0usize)]);
         let mut file_offsets = HashMap::from([(path_str.clone(), initial.len() as u64)]);
         let mut codex_model_cache = HashMap::new();

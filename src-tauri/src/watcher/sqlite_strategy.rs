@@ -6,7 +6,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use crate::adapters::{all_adapters, opencode};
+use crate::adapters::{all_agents, AgentDataBatch};
 use crate::db::WriteRequest;
 use crate::watcher::BehaviorRuntime;
 
@@ -20,8 +20,8 @@ pub fn run_sqlite_polling(
     initial_offset: Option<u64>,
     behavior_runtime: Option<BehaviorRuntime>,
 ) {
-    let adapters = all_adapters();
-    let adapter = match adapters.iter().find(|a| a.agent_name() == agent_name) {
+    let agents = all_agents();
+    let agent = match agents.iter().find(|a| a.agent_name() == agent_name) {
         Some(a) => a,
         None => return,
     };
@@ -47,20 +47,30 @@ pub fn run_sqlite_polling(
             continue;
         }
 
-        let query_result = if agent_name == "opencode" {
-            opencode::query_db_batch(
-                &db_path,
-                last_offset,
-                behavior_runtime
+        let query_result = agent
+            .query_sqlite_rows(&db_path, last_offset)
+            .map(|row_batch| {
+                let high_watermark = row_batch.high_watermark;
+                let batch = AgentDataBatch::SqliteRows {
+                    agent_name: agent_name.clone(),
+                    source_key: offset_key.clone(),
+                    db_path: db_path.clone(),
+                    rows: row_batch.rows,
+                    previous_watermark: last_offset,
+                    next_watermark: high_watermark,
+                };
+                let logs = agent.extract_tokens(&batch).logs;
+                let behavior_events = if behavior_runtime
                     .as_ref()
-                    .is_some_and(BehaviorRuntime::is_enabled),
-            )
-            .map(|batch| (batch.logs, batch.behavior_events, batch.high_watermark))
-        } else {
-            adapter
-                .query_db(&db_path, last_offset)
-                .map(|(logs, high_watermark)| (logs, Vec::new(), high_watermark))
-        };
+                    .is_some_and(BehaviorRuntime::is_enabled)
+                {
+                    agent.extract_behavior(&batch)
+                } else {
+                    Vec::new()
+                };
+
+                (logs, behavior_events, high_watermark)
+            });
 
         match query_result {
             Ok((logs, behavior_events, high_watermark)) => {

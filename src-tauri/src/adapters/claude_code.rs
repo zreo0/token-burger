@@ -1,8 +1,11 @@
-use super::{AgentAdapter, DataSource, TokenLog, TokenType};
+use super::{
+    AgentDataBatch, AgentSource, BehaviorExtractor, DataSource, TokenExtraction, TokenExtractor,
+    TokenLog, TokenType,
+};
 
 pub struct ClaudeCodeAdapter;
 
-impl AgentAdapter for ClaudeCodeAdapter {
+impl AgentSource for ClaudeCodeAdapter {
     fn agent_name(&self) -> &str {
         "claude-code"
     }
@@ -17,31 +20,43 @@ impl AgentAdapter for ClaudeCodeAdapter {
         let home = dirs::home_dir().unwrap_or_default();
         vec![format!("{}/.claude/projects/**/*.jsonl", home.display())]
     }
+}
 
-    fn parse_content(&self, content: &str) -> Vec<TokenLog> {
-        let mut logs = Vec::new();
-        let now = chrono::Local::now()
-            .format("%Y-%m-%dT%H:%M:%S%:z")
-            .to_string();
+impl TokenExtractor for ClaudeCodeAdapter {
+    fn extract_tokens(&self, batch: &AgentDataBatch) -> TokenExtraction {
+        let Some(content) = batch.token_content() else {
+            return TokenExtraction::default();
+        };
 
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
+        TokenExtraction::from_logs(parse_claude_content(content))
+    }
+}
+
+impl BehaviorExtractor for ClaudeCodeAdapter {}
+
+pub(crate) fn parse_claude_content(content: &str) -> Vec<TokenLog> {
+    let mut logs = Vec::new();
+    let now = chrono::Local::now()
+        .format("%Y-%m-%dT%H:%M:%S%:z")
+        .to_string();
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<serde_json::Value>(line) {
+            Ok(val) => {
+                if let Some(parsed) = parse_claude_line(&val, &now) {
+                    logs.extend(parsed);
+                }
             }
-            match serde_json::from_str::<serde_json::Value>(line) {
-                Ok(val) => {
-                    if let Some(parsed) = parse_claude_line(&val, &now) {
-                        logs.extend(parsed);
-                    }
-                }
-                Err(e) => {
-                    log::warn!("claude-code: 跳过无法解析的行: {}", e);
-                }
+            Err(e) => {
+                log::warn!("claude-code: 跳过无法解析的行: {}", e);
             }
         }
-        logs
     }
+    logs
 }
 
 fn parse_claude_line(val: &serde_json::Value, fallback_ts: &str) -> Option<Vec<TokenLog>> {
@@ -143,11 +158,24 @@ fn parse_claude_line(val: &serde_json::Value, fallback_ts: &str) -> Option<Vec<T
 mod tests {
     use super::*;
 
+    fn jsonl_batch(content: &str) -> AgentDataBatch {
+        AgentDataBatch::JsonlIncrement {
+            agent_name: "claude-code".to_string(),
+            source_key: "test.jsonl".to_string(),
+            path: "test.jsonl".into(),
+            content: content.to_string(),
+            token_context: None,
+            initial_model: None,
+            previous_offset: 0,
+            next_offset: content.len() as u64,
+        }
+    }
+
     #[test]
     fn test_parse_assistant_event() {
         let line = r#"{"type":"assistant","uuid":"abc-123","conversationId":"conv-1","message":{"model":"claude-3-7-sonnet-20250219","usage":{"input_tokens":1000,"cache_creation_input_tokens":200,"cache_read_input_tokens":50,"output_tokens":500}}}"#;
         let adapter = ClaudeCodeAdapter;
-        let logs = adapter.parse_content(line);
+        let logs = adapter.extract_tokens(&jsonl_batch(line)).logs;
         assert_eq!(logs.len(), 4);
         assert_eq!(logs[0].token_type, TokenType::Input);
         assert_eq!(logs[0].token_count, 1000);
@@ -161,7 +189,7 @@ mod tests {
     fn test_skip_non_assistant() {
         let line = r#"{"type":"human","message":{"content":"hello"}}"#;
         let adapter = ClaudeCodeAdapter;
-        let logs = adapter.parse_content(line);
+        let logs = adapter.extract_tokens(&jsonl_batch(line)).logs;
         assert!(logs.is_empty());
     }
 
@@ -169,14 +197,14 @@ mod tests {
     fn test_skip_invalid_json() {
         let content = "invalid json\n{\"type\":\"human\"}\n";
         let adapter = ClaudeCodeAdapter;
-        let logs = adapter.parse_content(content);
+        let logs = adapter.extract_tokens(&jsonl_batch(content)).logs;
         assert!(logs.is_empty());
     }
 
     #[test]
     fn test_empty_content() {
         let adapter = ClaudeCodeAdapter;
-        let logs = adapter.parse_content("");
+        let logs = adapter.extract_tokens(&jsonl_batch("")).logs;
         assert!(logs.is_empty());
     }
 }
