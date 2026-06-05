@@ -55,7 +55,7 @@ impl Default for AppSettings {
             polling_interval_secs: 10,
             language: "en".into(),
             color_theme: "warm".into(),
-            behavior_tips_enabled: true,
+            behavior_tips_enabled: false,
         }
     }
 }
@@ -88,4 +88,16 @@ pub struct ColdStartProgress {
 pub struct PlatformInfo {
     pub platform: String,
     pub display_name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_settings_default_disables_behavior_tips() {
+        let settings = AppSettings::default();
+
+        assert!(!settings.behavior_tips_enabled);
+    }
 }
