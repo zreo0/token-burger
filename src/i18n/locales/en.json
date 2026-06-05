@@ -19,6 +19,7 @@
         "title": "Settings",
         "general": "General",
         "agents": "Agents",
+        "alerts": "Run Alerts",
         "data": "Data",
         "language": "Language",
         "colorTheme": "Color Theme",
@@ -26,8 +27,8 @@
         "themeMuted": "Muted",
         "themeVivid": "Vivid",
         "watchMode": "Watch Mode",
-        "behaviorTips": "Behavior Tips",
-        "behaviorTipsHint": "Show a lightweight tip when an agent needs permission or finishes a turn",
+        "runAlerts": "Run Alerts",
+        "runAlertsHint": "When enabled, it pops up when something needs your attention",
         "realtime": "Realtime",
         "polling": "Polling",
         "keepDays": "Keep data for",
@@ -81,5 +82,25 @@
         "requiresCredential": "Requires credential",
         "saveCredential": "Save Credential",
         "clearCredential": "Clear"
+    },
+    "behaviorTip": {
+        "close": "Close alert",
+        "title": {
+            "turn_started": "New turn started",
+            "permission_requested": "Permission needed",
+            "permission_resolved": "Permission handled",
+            "run_completed": "Run completed",
+            "run_aborted": "Run stopped",
+            "tool_error": "Tool error"
+        },
+        "summary": {
+            "codexTurnStarted": "Codex started a new turn",
+            "codexPermissionRequested": "Codex is waiting for permission",
+            "codexPermissionResolved": "Permission request was handled",
+            "codexRunCompleted": "Codex finished the current turn",
+            "codexRunAborted": "Codex stopped the current turn",
+            "codexRunAbortedWithReason": "Codex stopped the current turn: {{reason}}",
+            "opencodeRunCompleted": "OpenCode finished the current turn"
+        }
     }
 }

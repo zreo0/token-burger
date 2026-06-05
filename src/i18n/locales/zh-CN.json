@@ -19,6 +19,7 @@
         "title": "设置",
         "general": "通用",
         "agents": "Agent",
+        "alerts": "运行提醒",
         "data": "数据",
         "language": "语言",
         "colorTheme": "配色风格",
@@ -26,8 +27,8 @@
         "themeMuted": "灰金",
         "themeVivid": "明亮",
         "watchMode": "监控模式",
-        "behaviorTips": "行为提醒",
-        "behaviorTipsHint": "在 Agent 等待权限或完成当前轮次时显示轻量提示",
+        "runAlerts": "运行提醒",
+        "runAlertsHint": "开启后会在需要你关注的时候蹦蹦蹦出来",
         "realtime": "实时",
         "polling": "轮询",
         "keepDays": "数据保留",
@@ -81,5 +82,25 @@
         "requiresCredential": "需要凭据",
         "saveCredential": "保存凭据",
         "clearCredential": "清除"
+    },
+    "behaviorTip": {
+        "close": "关闭提醒",
+        "title": {
+            "turn_started": "新轮次已开始",
+            "permission_requested": "需要你确认",
+            "permission_resolved": "权限已处理",
+            "run_completed": "运行完成",
+            "run_aborted": "运行已停止",
+            "tool_error": "工具出错"
+        },
+        "summary": {
+            "codexTurnStarted": "Codex 开始了新一轮",
+            "codexPermissionRequested": "Codex 正在等待权限确认",
+            "codexPermissionResolved": "权限请求已处理",
+            "codexRunCompleted": "Codex 完成了当前轮次",
+            "codexRunAborted": "Codex 停止了当前轮次",
+            "codexRunAbortedWithReason": "Codex 停止了当前轮次：{{reason}}",
+            "opencodeRunCompleted": "OpenCode 完成了当前轮次"
+        }
     }
 }

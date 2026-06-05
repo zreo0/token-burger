@@ -14,7 +14,7 @@ import openaiProviderIcon from '../../assets/provider-icons/openai.svg';
 import githubCopilotProviderIcon from '../../assets/provider-icons/github-copilot.svg';
 import './index.css';
 
-type Tab = 'general' | 'agents' | 'data' | 'usage' | 'about';
+type Tab = 'general' | 'agents' | 'alerts' | 'data' | 'usage' | 'about';
 
 // 账号用量 Provider 逐个开放，菜单栏展示仅对可计算百分比的 Provider 启用。
 const VISIBLE_USAGE_PROVIDER_IDS = new Set(['codex', 'github-copilot']);
@@ -165,7 +165,7 @@ function Settings() {
             <div className="settings-container">
                 <div className="settings-header">
                     <div className="settings-tabs">
-                        {(['general', 'agents', 'data', 'usage', 'about'] as Tab[]).map((t_) => (
+                        {(['general', 'agents', 'alerts', 'data', 'usage', 'about'] as Tab[]).map((t_) => (
                             <button
                                 key={t_}
                                 type="button"
@@ -229,22 +229,6 @@ function Settings() {
                                             ))}
                                         </div>
                                     </div>
-                                    <div className="setting-divider" />
-                                    <div className="setting-row">
-                                        <div className="setting-copy">
-                                            <span className="setting-label">{t('settings.behaviorTips')}</span>
-                                            <span className="setting-hint">{t('settings.behaviorTipsHint')}</span>
-                                        </div>
-                                        <label className="mac-toggle">
-                                            <input
-                                                type="checkbox"
-                                                checked={settings.behavior_tips_enabled}
-                                                onChange={() => updateSetting('behavior_tips_enabled', String(!settings.behavior_tips_enabled))}
-                                            />
-                                            <span className="mac-toggle-slider" />
-                                        </label>
-                                    </div>
-                                    <div className="setting-divider" />
                                     <div className="setting-row">
                                         <span className="setting-label">{t('settings.watchMode')}</span>
                                         <div className="segmented-control">
@@ -259,6 +243,25 @@ function Settings() {
                                                 </button>
                                             ))}
                                         </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {tab === 'alerts' && settings && (
+                                <div className="settings-group">
+                                    <div className="setting-row">
+                                        <div className="setting-copy">
+                                            <span className="setting-label">{t('settings.runAlerts')}</span>
+                                            <span className="setting-hint">{t('settings.runAlertsHint')}</span>
+                                        </div>
+                                        <label className="mac-toggle">
+                                            <input
+                                                type="checkbox"
+                                                checked={settings.behavior_tips_enabled}
+                                                onChange={() => updateSetting('behavior_tips_enabled', String(!settings.behavior_tips_enabled))}
+                                            />
+                                            <span className="mac-toggle-slider" />
+                                        </label>
                                     </div>
                                 </div>
                             )}

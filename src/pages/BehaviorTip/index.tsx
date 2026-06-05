@@ -2,8 +2,21 @@ import { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { AnimatePresence, motion } from 'framer-motion';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import type { BehaviorTip as BehaviorTipPayload } from '../../types';
 import './index.css';
+
+const SUMMARY_KEYS: Record<string, string> = {
+    'codex:A new turn started': 'behaviorTip.summary.codexTurnStarted',
+    'codex:Codex is waiting for permission': 'behaviorTip.summary.codexPermissionRequested',
+    'codex:Permission request was handled': 'behaviorTip.summary.codexPermissionResolved',
+    'codex:Codex finished the current turn': 'behaviorTip.summary.codexRunCompleted',
+    'codex:Codex stopped the current turn': 'behaviorTip.summary.codexRunAborted',
+    'opencode:OpenCode finished the current turn': 'behaviorTip.summary.opencodeRunCompleted',
+};
+
+const CODEX_ABORT_PREFIX = 'Codex stopped the current turn: ';
 
 export function agentLabel(agentName: string): string {
     if (agentName === 'codex') return 'Codex';
@@ -22,7 +35,25 @@ export function shouldAutoHide(tip: BehaviorTipPayload): boolean {
     return typeof tip.auto_hide_ms === 'number' && tip.auto_hide_ms > 0;
 }
 
+export function localizedTipTitle(t: TFunction, tip: BehaviorTipPayload): string {
+    return t(`behaviorTip.title.${tip.kind}`, { defaultValue: tip.title });
+}
+
+export function localizedTipSummary(t: TFunction, tip: BehaviorTipPayload): string {
+    const summaryKey = SUMMARY_KEYS[`${tip.agent_name}:${tip.summary}`];
+    if (summaryKey) return t(summaryKey);
+
+    if (tip.agent_name === 'codex' && tip.summary.startsWith(CODEX_ABORT_PREFIX)) {
+        return t('behaviorTip.summary.codexRunAbortedWithReason', {
+            reason: tip.summary.slice(CODEX_ABORT_PREFIX.length),
+        });
+    }
+
+    return tip.summary;
+}
+
 function BehaviorTip() {
+    const { t } = useTranslation();
     const [tip, setTip] = useState<BehaviorTipPayload | null>(null);
     const tone = useMemo(() => tip ? kindClass(tip.kind) : 'neutral', [tip]);
     const tipKey = tip?.key;
@@ -82,13 +113,13 @@ function BehaviorTip() {
                         <div className="behavior-tip-status" aria-hidden="true" />
                         <div className="behavior-tip-copy">
                             <div className="behavior-tip-meta">{agentLabel(tip.agent_name)}</div>
-                            <div className="behavior-tip-title">{tip.title}</div>
-                            <div className="behavior-tip-summary">{tip.summary}</div>
+                            <div className="behavior-tip-title">{localizedTipTitle(t, tip)}</div>
+                            <div className="behavior-tip-summary">{localizedTipSummary(t, tip)}</div>
                         </div>
                         <button
                             type="button"
                             className="behavior-tip-close"
-                            aria-label="Close"
+                            aria-label={t('behaviorTip.close')}
                             onClick={close}
                         >
                             ×
