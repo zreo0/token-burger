@@ -40,8 +40,16 @@
 ## Architecture Patterns
 
 - **前后端分层**: Rust 负责系统级操作（文件监听、SQLite、Tray），React 负责 UI 渲染
-- **适配器模式**: AgentAdapter Trait 统一不同 Agent 的日志解析
+- **Agent Pipeline**: `AgentSource` 描述数据源，`TokenExtractor` 与 `BehaviorExtractor` 消费同一批数据
 - **事件驱动**: Tauri emit/listen 实现前后端实时通信
+
+## Agent 数据监听设计
+
+- Watcher 是唯一的数据读取入口，负责文件监听、SQLite 轮询、offset/watermark 推进和冷启动编排。
+- Agent 只声明数据源和解析能力：`AgentSource` 提供路径或 SQLite 位置，`AgentDataBatch` 承载 JSONL 增量、JSON 全量或 SQLite row。
+- Token 统计和运行提醒是同级消费者，分别通过 `TokenExtractor`、`BehaviorExtractor` 从同一个 batch 解析，避免重复监听或重复读取。
+- 冷启动只做 token 统计，不触发运行提醒；运行提醒关闭时不调用行为解析器，也不缓存关闭期间事件。
+- 新增 Agent 或新增行为解析时，优先扩展对应 Agent pipeline，不要绕过 Watcher 新建独立数据源读取链路。
 
 ## Git Workflow
 
