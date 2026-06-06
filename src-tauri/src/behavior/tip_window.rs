@@ -75,6 +75,7 @@ fn ensure_tip_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewWin
     .inner_size(TIP_WINDOW_WIDTH, TIP_WINDOW_HEIGHT)
     .resizable(false)
     .decorations(false)
+    .shadow(false)
     .transparent(true)
     .background_color(TRANSPARENT_BACKGROUND)
     .always_on_top(true)
