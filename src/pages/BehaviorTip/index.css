@@ -15,41 +15,89 @@
 .behavior-tip-card {
     position: relative;
     display: grid;
-    grid-template-columns: 5px minmax(0, 1fr) 28px;
-    gap: 12px;
+    grid-template-columns: 40px minmax(0, 1fr) 28px;
+    align-items: center;
+    gap: 11px;
     width: 100%;
     height: 100%;
-    padding: 14px 13px 14px 14px;
+    padding: 12px 11px 12px 12px;
     border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 18px;
-    background: rgba(25, 25, 24, 0.96);
+    border-radius: 20px;
+    background: rgba(22, 22, 21, 0.97);
     box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.07),
-        0 18px 34px rgba(0, 0, 0, 0.32);
+        inset 0 1px 0 rgba(255, 255, 255, 0.09),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.36),
+        0 18px 38px rgba(0, 0, 0, 0.34);
     color: #fffaf2;
     box-sizing: border-box;
     overflow: hidden;
 }
 
+.behavior-tip-card::before {
+    content: '';
+    position: absolute;
+    inset: 1px;
+    border-radius: 19px;
+    pointer-events: none;
+    box-shadow: inset 0 0 0 1px rgba(255, 250, 242, 0.035);
+}
+
+.behavior-tip-icon-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 15px;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.025)),
+        rgba(255, 250, 242, 0.045);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.12),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.075);
+}
+
+.behavior-tip-icon {
+    width: 23px;
+    height: 23px;
+    object-fit: contain;
+    opacity: 0.94;
+    filter: saturate(0.92);
+}
+
+.behavior-tip-icon-fallback {
+    font-size: 11px;
+    line-height: 1;
+    font-weight: 700;
+    color: rgba(255, 250, 242, 0.76);
+}
+
 .behavior-tip-status {
-    width: 5px;
-    height: 100%;
+    position: absolute;
+    right: 5px;
+    bottom: 5px;
+    width: 7px;
+    height: 7px;
     border-radius: 999px;
-    align-self: stretch;
-    background: #d9c49f;
-    animation: behavior-tip-breathe 2.6s ease-in-out infinite;
+    background: #d2b983;
+    box-shadow: 0 0 0 3px rgba(210, 185, 131, 0.12);
+    animation: behavior-tip-breathe 2.8s cubic-bezier(0.32, 0.72, 0, 1) infinite;
 }
 
 .behavior-tip-card.success .behavior-tip-status {
-    background: #32d76d;
+    background: #85c796;
+    box-shadow: 0 0 0 3px rgba(133, 199, 150, 0.12);
 }
 
 .behavior-tip-card.warning .behavior-tip-status {
-    background: #bc6657;
+    background: #c88474;
+    box-shadow: 0 0 0 3px rgba(200, 132, 116, 0.12);
 }
 
 .behavior-tip-card.neutral .behavior-tip-status {
-    background: #9c9a95;
+    background: #a7a39a;
+    box-shadow: 0 0 0 3px rgba(167, 163, 154, 0.12);
 }
 
 .behavior-tip-copy {
@@ -57,32 +105,44 @@
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 4px;
+    gap: 6px;
 }
 
-.behavior-tip-meta {
-    font-size: 11px;
-    line-height: 1;
-    font-weight: 700;
+.behavior-tip-heading {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    line-height: 1.1;
+    font-weight: 650;
     letter-spacing: 0;
+    color: #fffaf2;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.behavior-tip-agent {
+    flex: 0 0 auto;
     color: rgba(255, 250, 242, 0.72);
 }
 
+.behavior-tip-dot {
+    flex: 0 0 auto;
+    color: rgba(255, 250, 242, 0.34);
+}
+
 .behavior-tip-title {
-    font-size: 15px;
-    line-height: 1.15;
-    font-weight: 700;
-    color: #fffaf2;
-    white-space: nowrap;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
 .behavior-tip-summary {
-    font-size: 12px;
-    line-height: 1.25;
-    font-weight: 500;
-    color: rgba(255, 250, 242, 0.82);
+    font-size: 13px;
+    line-height: 1.18;
+    font-weight: 560;
+    color: rgba(255, 250, 242, 0.78);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -96,18 +156,22 @@
     height: 28px;
     border: 0;
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 250, 242, 0.82);
-    font-size: 18px;
+    background: rgba(255, 255, 255, 0.055);
+    color: rgba(255, 250, 242, 0.58);
+    font-size: 17px;
     line-height: 1;
     cursor: default;
     align-self: start;
-    transition: background 140ms ease, color 140ms ease;
+    transition:
+        background 240ms cubic-bezier(0.32, 0.72, 0, 1),
+        color 240ms cubic-bezier(0.32, 0.72, 0, 1),
+        transform 240ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .behavior-tip-close:hover {
-    background: rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.12);
     color: #fffaf2;
+    transform: scale(1.03);
 }
 
 .behavior-tip-close:focus-visible {

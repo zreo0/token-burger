@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { TFunction } from 'i18next';
-import { agentLabel, kindClass, localizedTipSummary, localizedTipTitle, shouldAutoHide } from '../index';
+import {
+    agentIcon,
+    agentLabel,
+    kindClass,
+    localizedTipSummary,
+    localizedTipTitle,
+    shouldAutoHide,
+} from '../index';
 import type { BehaviorTip } from '../../../types';
 
 const translations: Record<string, string> = {
@@ -33,6 +40,12 @@ describe('BehaviorTip helpers', () => {
         expect(agentLabel('codex')).toBe('Codex');
         expect(agentLabel('opencode')).toBe('OpenCode');
         expect(agentLabel('custom-agent')).toBe('custom-agent');
+    });
+
+    it('优先映射 Agent SVG 图标', () => {
+        expect(agentIcon('codex')).toContain('svg');
+        expect(agentIcon('opencode')).toContain('svg');
+        expect(agentIcon('custom-agent')).toBeNull();
     });
 
     it('按事件类型映射视觉状态', () => {

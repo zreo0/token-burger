@@ -8,6 +8,7 @@ use tauri::{AppHandle, Manager};
 use super::{tip_window, AgentBehaviorEvent, AgentBehaviorKind, BehaviorTip};
 
 const MAX_QUEUE_LEN: usize = 10;
+const MAIN_TRAY_ID: &str = "main";
 
 /// 行为提示队列的展示状态
 #[derive(Debug, Default)]
@@ -212,7 +213,7 @@ impl BehaviorDispatcher {
     fn sync_window(&self, current: Option<BehaviorTip>) {
         match current {
             Some(tip) => {
-                let rect = self.tray_rect.lock().ok().and_then(|rect| *rect);
+                let rect = self.current_tray_rect();
                 if tip_window::show_tip_window(&self.app, rect, &tip).is_ok() {
                     self.start_auto_hide_timer(&tip);
                 }
@@ -221,6 +222,24 @@ impl BehaviorDispatcher {
                 let _ = tip_window::hide_tip_window(&self.app);
             }
         }
+    }
+
+    fn current_tray_rect(&self) -> Option<tip_window::TrayRect> {
+        if let Some(rect) = self.read_main_tray_rect() {
+            return Some(rect);
+        }
+
+        self.tray_rect.lock().ok().and_then(|rect| *rect)
+    }
+
+    fn read_main_tray_rect(&self) -> Option<tip_window::TrayRect> {
+        let rect = self.app.tray_by_id(MAIN_TRAY_ID)?.rect().ok().flatten()?;
+        let rect = tip_window::TrayRect::from_tauri_rect(&rect);
+        if let Ok(mut cached) = self.tray_rect.lock() {
+            *cached = Some(rect);
+        }
+
+        Some(rect)
     }
 
     fn start_auto_hide_timer(&self, tip: &BehaviorTip) {

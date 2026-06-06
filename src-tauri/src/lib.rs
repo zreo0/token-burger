@@ -11,6 +11,8 @@ mod watcher;
 
 use std::sync::{atomic::AtomicBool, Arc};
 
+#[cfg(not(target_os = "windows"))]
+use tauri::webview::Color;
 use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Runtime, WebviewUrl,
@@ -22,6 +24,8 @@ const POPUP_WINDOW_WIDTH: f64 = 390.0;
 const POPUP_WINDOW_HEIGHT: f64 = 540.0;
 const POPUP_WINDOW_MAX_HEIGHT: f64 = 680.0;
 const POPUP_OFFSCREEN_POSITION: f64 = -10_000.0;
+#[cfg(not(target_os = "windows"))]
+const TRANSPARENT_BACKGROUND: Color = Color(0, 0, 0, 0);
 
 fn attach_popup_auto_hide<R: Runtime>(_popup: &WebviewWindow<R>) {
     #[cfg(not(debug_assertions))]
@@ -87,6 +91,9 @@ fn ensure_popup_window<R: Runtime>(
     .resizable(false)
     .decorations(false)
     .transparent(transparent);
+
+    #[cfg(not(target_os = "windows"))]
+    let popup_builder = popup_builder.background_color(TRANSPARENT_BACKGROUND);
 
     #[cfg(target_os = "windows")]
     let popup_builder = popup_builder.shadow(false);
@@ -303,7 +310,7 @@ pub fn run() {
             let menu = commands::build_tray_menu(app.handle(), &language)?;
 
             // 创建 tray icon
-            let _tray = TrayIconBuilder::with_id("main")
+            let tray = TrayIconBuilder::with_id("main")
                 .icon(icon)
                 .icon_as_template(true)
                 .title(commands::main_tray_scanning_title(&language))
@@ -357,6 +364,10 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            if let Ok(Some(rect)) = tray.rect() {
+                behavior.cache_tray_rect(&rect);
+            }
 
             commands::sync_account_usage_tray_items(app.handle());
             prewarm_popup_window(app.handle());

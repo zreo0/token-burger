@@ -1,14 +1,15 @@
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, Rect, Runtime,
-    WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    webview::Color, AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition,
+    Rect, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 
 use super::BehaviorTip;
 
 const TIP_WINDOW_LABEL: &str = "behavior-tip";
 const TIP_WINDOW_WIDTH: f64 = 320.0;
-const TIP_WINDOW_HEIGHT: f64 = 104.0;
+const TIP_WINDOW_HEIGHT: f64 = 88.0;
 const TIP_MARGIN: f64 = 18.0;
+const TRANSPARENT_BACKGROUND: Color = Color(0, 0, 0, 0);
 
 /// 简化后的托盘位置缓存
 #[derive(Debug, Clone, Copy)]
@@ -75,6 +76,7 @@ fn ensure_tip_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewWin
     .resizable(false)
     .decorations(false)
     .transparent(true)
+    .background_color(TRANSPARENT_BACKGROUND)
     .always_on_top(true)
     .skip_taskbar(true)
     .visible(false)
@@ -113,10 +115,7 @@ fn position_near_tray<R: Runtime>(app: &AppHandle<R>, rect: TrayRect) -> (f64, f
 
     #[cfg(not(target_os = "windows"))]
     {
-        (
-            x + (width / 2.0) - (TIP_WINDOW_WIDTH / 2.0),
-            y + height + 8.0,
-        )
+        (x + (width / 2.0) - (TIP_WINDOW_WIDTH / 2.0), y + height)
     }
 }
 

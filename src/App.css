@@ -43,7 +43,8 @@ html.popup-window-root body,
 html.popup-window-root #root,
 body.popup-window,
 body.popup-window #root {
-    background: transparent;
+    background: transparent !important;
+    background-color: transparent !important;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -57,6 +58,7 @@ body.popup-window #root {
     html.popup-window-root #root,
     body.popup-window,
     body.popup-window #root {
-        background: transparent;
+        background: transparent !important;
+        background-color: transparent !important;
     }
 }

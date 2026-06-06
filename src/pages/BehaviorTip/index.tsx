@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import type { BehaviorTip as BehaviorTipPayload } from '../../types';
+import claudeCodeProviderIcon from '../../assets/provider-icons/claude-code.svg';
+import githubCopilotProviderIcon from '../../assets/provider-icons/github-copilot.svg';
+import openaiProviderIcon from '../../assets/provider-icons/openai.svg';
+import opencodeProviderIcon from '../../assets/provider-icons/opencode.svg';
 import './index.css';
 
 const SUMMARY_KEYS: Record<string, string> = {
@@ -17,11 +21,21 @@ const SUMMARY_KEYS: Record<string, string> = {
 };
 
 const CODEX_ABORT_PREFIX = 'Codex stopped the current turn: ';
+const AGENT_ICONS: Record<string, string> = {
+    codex: openaiProviderIcon,
+    'claude-code': claudeCodeProviderIcon,
+    'github-copilot': githubCopilotProviderIcon,
+    opencode: opencodeProviderIcon,
+};
 
 export function agentLabel(agentName: string): string {
     if (agentName === 'codex') return 'Codex';
     if (agentName === 'opencode') return 'OpenCode';
     return agentName;
+}
+
+export function agentIcon(agentName: string): string | null {
+    return AGENT_ICONS[agentName] ?? null;
 }
 
 export function kindClass(kind: BehaviorTipPayload['kind']): string {
@@ -56,10 +70,11 @@ function BehaviorTip() {
     const { t } = useTranslation();
     const [tip, setTip] = useState<BehaviorTipPayload | null>(null);
     const tone = useMemo(() => tip ? kindClass(tip.kind) : 'neutral', [tip]);
+    const icon = useMemo(() => tip ? agentIcon(tip.agent_name) : null, [tip]);
     const tipKey = tip?.key;
     const autoHideMs = tip?.auto_hide_ms;
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         document.documentElement.classList.add('popup-window-root');
         document.body.classList.add('popup-window');
 
@@ -110,10 +125,26 @@ function BehaviorTip() {
                         exit={{ opacity: 0, y: -4, scale: 0.985 }}
                         transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
                     >
-                        <div className="behavior-tip-status" aria-hidden="true" />
+                        <div className="behavior-tip-icon-wrap" aria-hidden="true">
+                            {icon ? (
+                                <img
+                                    className="behavior-tip-icon"
+                                    src={icon}
+                                    alt=""
+                                />
+                            ) : (
+                                <span className="behavior-tip-icon-fallback">
+                                    {agentLabel(tip.agent_name).slice(0, 2).toUpperCase()}
+                                </span>
+                            )}
+                            <span className="behavior-tip-status" />
+                        </div>
                         <div className="behavior-tip-copy">
-                            <div className="behavior-tip-meta">{agentLabel(tip.agent_name)}</div>
-                            <div className="behavior-tip-title">{localizedTipTitle(t, tip)}</div>
+                            <div className="behavior-tip-heading">
+                                <span className="behavior-tip-agent">{agentLabel(tip.agent_name)}</span>
+                                <span className="behavior-tip-dot" aria-hidden="true">·</span>
+                                <span className="behavior-tip-title">{localizedTipTitle(t, tip)}</span>
+                            </div>
                             <div className="behavior-tip-summary">{localizedTipSummary(t, tip)}</div>
                         </div>
                         <button
