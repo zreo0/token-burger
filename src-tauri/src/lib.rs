@@ -95,7 +95,6 @@ fn ensure_popup_window<R: Runtime>(
     #[cfg(not(target_os = "windows"))]
     let popup_builder = popup_builder.background_color(TRANSPARENT_BACKGROUND);
 
-    #[cfg(target_os = "windows")]
     let popup_builder = popup_builder.shadow(false);
 
     let popup = popup_builder
