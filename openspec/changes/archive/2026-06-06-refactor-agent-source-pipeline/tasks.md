@@ -51,4 +51,4 @@
 - [x] 6.3 运行前端测试，确认行为提示和 Settings 不回归
 - [x] 6.4 运行 lint 和 build，确认 Tauri/React 构建链路不回归
 - [x] 6.5 运行 `openspec validate refactor-agent-source-pipeline --strict`
-- [ ] 6.6 手动烟测 token 统计、Popup 打开、Agent 开关重启 watcher、Codex 权限提示和 OpenCode 完成提示
+- [x] 6.6 手动烟测 token 统计、Popup 打开、Agent 开关重启 watcher、Codex 权限提示和 OpenCode 完成提示
