@@ -63,6 +63,8 @@ pub fn hide_tip_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
 fn ensure_tip_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewWindow<R>> {
     if let Some(window) = app.get_webview_window(TIP_WINDOW_LABEL) {
+        let _ = window.set_focusable(false);
+        let _ = window.set_skip_taskbar(true);
         return Ok(window);
     }
 
@@ -81,6 +83,7 @@ fn ensure_tip_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewWin
     .always_on_top(true)
     .skip_taskbar(true)
     .visible(false)
+    .focusable(false)
     .focused(false);
 
     let window = builder.build()?;
