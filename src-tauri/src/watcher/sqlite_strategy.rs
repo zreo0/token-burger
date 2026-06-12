@@ -20,17 +20,38 @@ const UPDATED_BATCH_LIMIT: usize = 500;
 const UPDATED_RECONCILE_SESSIONS_PER_POLL: usize = 5;
 const SQLITE_CURSOR_OVERLAP_MS: i64 = 120_000;
 
+/// SQLite 轮询启动配置
+pub struct SqlitePollingConfig {
+    /// Agent 名称
+    pub agent_name: String,
+    /// 外部 SQLite 数据库路径
+    pub db_path: PathBuf,
+    /// 本地应用数据库路径
+    pub local_db_path: PathBuf,
+    /// 写入线程通道
+    pub write_tx: Sender<WriteRequest>,
+    /// 停止信号
+    pub stop_flag: Arc<AtomicBool>,
+    /// 轮询间隔秒数
+    pub poll_interval_secs: u32,
+    /// 旧版全局 offset，用于冷启动迁移
+    pub initial_offset: Option<u64>,
+    /// 行为提醒运行时
+    pub behavior_runtime: Option<BehaviorRuntime>,
+}
+
 /// 定时 SQLite 轮询策略（用于 OpenCode/MiMoCode 等外部 DB 适配器）
-pub fn run_sqlite_polling(
-    agent_name: String,
-    db_path: PathBuf,
-    local_db_path: PathBuf,
-    write_tx: Sender<WriteRequest>,
-    stop_flag: Arc<AtomicBool>,
-    poll_interval_secs: u32,
-    initial_offset: Option<u64>,
-    behavior_runtime: Option<BehaviorRuntime>,
-) {
+pub fn run_sqlite_polling(config: SqlitePollingConfig) {
+    let SqlitePollingConfig {
+        agent_name,
+        db_path,
+        local_db_path,
+        write_tx,
+        stop_flag,
+        poll_interval_secs,
+        initial_offset,
+        behavior_runtime,
+    } = config;
     let agents = all_agents();
     let agent = match agents.iter().find(|a| a.agent_name() == agent_name) {
         Some(a) => a,
@@ -73,7 +94,13 @@ pub fn run_sqlite_polling(
         }
         let conn = external_conn.as_ref().expect("external SQLite conn exists");
 
-        if cursors.is_none() {
+        if let Some(existing_cursors) = cursors.as_mut() {
+            if let Err(e) = sync_known_sessions(agent.as_ref(), conn, &source_key, existing_cursors)
+            {
+                log::warn!("{}: SQLite session 刷新失败: {}", agent_name, e);
+                continue;
+            }
+        } else {
             cursors = match load_or_bootstrap_cursors(
                 agent.as_ref(),
                 conn,
@@ -88,11 +115,6 @@ pub fn run_sqlite_polling(
                     continue;
                 }
             };
-        } else if let Err(e) =
-            sync_known_sessions(agent.as_ref(), conn, &source_key, cursors.as_mut().unwrap())
-        {
-            log::warn!("{}: SQLite session 刷新失败: {}", agent_name, e);
-            continue;
         }
 
         let cursors = match cursors.as_mut() {

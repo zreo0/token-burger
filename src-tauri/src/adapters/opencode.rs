@@ -340,7 +340,7 @@ pub(crate) fn query_created_cursor_before_watermark(
     session_id: &str,
     watermark: u64,
 ) -> Result<Option<SqliteCreatedCursor>, Box<dyn std::error::Error>> {
-    let watermark_column = opencode_watermark_column(&conn)?;
+    let watermark_column = opencode_watermark_column(conn)?;
     let watermark = watermark.min(i64::MAX as u64) as i64;
 
     let result = if session_id == SQLITE_NULL_SESSION_ID {

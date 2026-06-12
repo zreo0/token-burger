@@ -455,16 +455,16 @@ fn start_watchers(
             let behavior_runtime = behavior.cloned();
 
             thread::spawn(move || {
-                sqlite_strategy::run_sqlite_polling(
-                    name,
-                    dp,
-                    local_dp,
-                    tx,
-                    flag,
-                    poll_secs,
+                sqlite_strategy::run_sqlite_polling(sqlite_strategy::SqlitePollingConfig {
+                    agent_name: name,
+                    db_path: dp,
+                    local_db_path: local_dp,
+                    write_tx: tx,
+                    stop_flag: flag,
+                    poll_interval_secs: poll_secs,
                     initial_offset,
                     behavior_runtime,
-                );
+                });
             });
         }
     }

@@ -24,7 +24,7 @@ jobs:
           node-version: lts/*
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: clippy, rustfmt
 
@@ -63,4 +63,3 @@ jobs:
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test
-

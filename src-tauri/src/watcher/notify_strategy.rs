@@ -109,16 +109,14 @@ pub fn run_notify_polling(
                 if stop_flag.load(Ordering::Relaxed) {
                     break;
                 }
-                process_events(
-                    &events,
-                    &adapter_names,
-                    &agents,
-                    &path_to_adapter,
-                    &mut file_offsets,
-                    &mut codex_model_cache,
-                    &write_tx,
-                    behavior.clone(),
-                );
+                let context = PathChangeContext {
+                    agent_names: &adapter_names,
+                    agents: &agents,
+                    path_to_adapter: &path_to_adapter,
+                    write_tx: &write_tx,
+                    behavior: behavior.clone(),
+                };
+                process_events(&events, &context, &mut file_offsets, &mut codex_model_cache);
             }
             Ok(Err(errs)) => {
                 for e in errs {
@@ -161,22 +159,10 @@ pub fn run_notify_polling(
 /// 处理 debounced 文件变化事件
 fn process_events(
     events: &[DebouncedEvent],
-    agent_names: &[String],
-    agents: &[Box<dyn AgentPipeline>],
-    path_to_adapter: &HashMap<String, usize>,
+    context: &PathChangeContext<'_>,
     file_offsets: &mut HashMap<String, u64>,
     codex_model_cache: &mut HashMap<String, String>,
-    write_tx: &Sender<WriteRequest>,
-    behavior: Option<BehaviorRuntime>,
 ) {
-    let context = PathChangeContext {
-        agent_names,
-        agents,
-        path_to_adapter,
-        write_tx,
-        behavior,
-    };
-
     for event in events {
         for path in &event.paths {
             let path_str = path.to_string_lossy().to_string();
@@ -184,7 +170,7 @@ fn process_events(
                 path,
                 &path_str,
                 "notify",
-                &context,
+                context,
                 file_offsets,
                 codex_model_cache,
             );
