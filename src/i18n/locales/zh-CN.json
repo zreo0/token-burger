@@ -100,7 +100,8 @@
             "codexRunCompleted": "Codex 完成了当前轮次",
             "codexRunAborted": "Codex 停止了当前轮次",
             "codexRunAbortedWithReason": "Codex 停止了当前轮次：{{reason}}",
-            "opencodeRunCompleted": "OpenCode 完成了当前轮次"
+            "opencodeRunCompleted": "OpenCode 完成了当前轮次",
+            "mimocodeRunCompleted": "MiMoCode 完成了当前轮次"
         }
     }
 }

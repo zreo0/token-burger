@@ -15,6 +15,7 @@ const translations: Record<string, string> = {
     'behaviorTip.title.run_completed': '运行完成',
     'behaviorTip.summary.codexPermissionRequested': 'Codex 正在等待权限确认',
     'behaviorTip.summary.codexRunAbortedWithReason': 'Codex 停止了当前轮次：{{reason}}',
+    'behaviorTip.summary.mimocodeRunCompleted': 'MiMoCode 完成了当前轮次',
 };
 
 const t = ((key: string, options?: { defaultValue?: string; reason?: string }) => {
@@ -39,12 +40,14 @@ describe('BehaviorTip helpers', () => {
     it('映射 Agent 展示名', () => {
         expect(agentLabel('codex')).toBe('Codex');
         expect(agentLabel('opencode')).toBe('OpenCode');
+        expect(agentLabel('mimocode')).toBe('MiMoCode');
         expect(agentLabel('custom-agent')).toBe('custom-agent');
     });
 
     it('优先映射 Agent SVG 图标', () => {
         expect(agentIcon('codex')).toContain('svg');
         expect(agentIcon('opencode')).toContain('svg');
+        expect(agentIcon('mimocode')).toContain('svg');
         expect(agentIcon('custom-agent')).toBeNull();
     });
 
@@ -86,5 +89,16 @@ describe('BehaviorTip helpers', () => {
         });
 
         expect(localizedTipSummary(t, tip)).toBe('Codex 停止了当前轮次：user canceled');
+    });
+
+    it('本地化 MiMoCode 完成摘要', () => {
+        const tip = makeTip({
+            agent_name: 'mimocode',
+            kind: 'run_completed',
+            title: 'Run completed',
+            summary: 'MiMoCode finished the current turn',
+        });
+
+        expect(localizedTipSummary(t, tip)).toBe('MiMoCode 完成了当前轮次');
     });
 });

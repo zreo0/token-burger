@@ -9,6 +9,7 @@ import claudeCodeProviderIcon from '../../assets/provider-icons/claude-code.svg'
 import githubCopilotProviderIcon from '../../assets/provider-icons/github-copilot.svg';
 import openaiProviderIcon from '../../assets/provider-icons/openai.svg';
 import opencodeProviderIcon from '../../assets/provider-icons/opencode.svg';
+import xiaomiMiMoProviderIcon from '../../assets/provider-icons/xiaomimimo.svg';
 import './index.css';
 
 const SUMMARY_KEYS: Record<string, string> = {
@@ -18,6 +19,7 @@ const SUMMARY_KEYS: Record<string, string> = {
     'codex:Codex finished the current turn': 'behaviorTip.summary.codexRunCompleted',
     'codex:Codex stopped the current turn': 'behaviorTip.summary.codexRunAborted',
     'opencode:OpenCode finished the current turn': 'behaviorTip.summary.opencodeRunCompleted',
+    'mimocode:MiMoCode finished the current turn': 'behaviorTip.summary.mimocodeRunCompleted',
 };
 
 const CODEX_ABORT_PREFIX = 'Codex stopped the current turn: ';
@@ -26,11 +28,13 @@ const AGENT_ICONS: Record<string, string> = {
     'claude-code': claudeCodeProviderIcon,
     'github-copilot': githubCopilotProviderIcon,
     opencode: opencodeProviderIcon,
+    mimocode: xiaomiMiMoProviderIcon,
 };
 
 export function agentLabel(agentName: string): string {
     if (agentName === 'codex') return 'Codex';
     if (agentName === 'opencode') return 'OpenCode';
+    if (agentName === 'mimocode') return 'MiMoCode';
     return agentName;
 }
 

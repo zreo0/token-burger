@@ -49,7 +49,12 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            enabled_agents: vec!["claude-code".into(), "codex".into(), "opencode".into()],
+            enabled_agents: vec![
+                "claude-code".into(),
+                "codex".into(),
+                "opencode".into(),
+                "mimocode".into(),
+            ],
             watch_mode: "realtime".into(),
             keep_days: 365,
             polling_interval_secs: 10,

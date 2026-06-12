@@ -78,7 +78,7 @@ pub(crate) fn build_account_usage_menu_bar_items(
 fn provider_icon_available(provider_id: &str) -> bool {
     matches!(
         provider_id,
-        "codex" | "claude-code" | "cursor" | "github-copilot"
+        "codex" | "claude-code" | "cursor" | "github-copilot" | "mimocode"
     )
 }
 
@@ -239,6 +239,7 @@ fn provider_icon_bytes(provider_id: &str) -> Option<&'static [u8]> {
         "github-copilot" => Some(include_bytes!(
             "../icons/provider-menubar/github-copilot.pdf"
         )),
+        "mimocode" => Some(include_bytes!("../icons/provider-menubar/xiaomimimo.pdf")),
         _ => None,
     }
 }

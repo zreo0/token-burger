@@ -1,5 +1,6 @@
 pub mod codex;
 pub mod dispatcher;
+pub mod mimocode;
 pub mod opencode;
 pub mod tip_window;
 

@@ -1,6 +1,7 @@
 pub mod claude_code;
 pub mod codex;
 pub mod gemini_cli;
+pub mod mimocode;
 pub mod opencode;
 
 use std::path::{Path, PathBuf};
@@ -196,6 +197,7 @@ pub fn all_agents() -> Vec<Box<dyn AgentPipeline>> {
         Box::new(claude_code::ClaudeCodeAdapter),
         Box::new(codex::CodexAdapter),
         Box::new(gemini_cli::GeminiCliAdapter),
+        Box::new(mimocode::MiMoCodeAdapter),
         Box::new(opencode::OpenCodeAdapter),
     ]
 }

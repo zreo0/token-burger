@@ -100,7 +100,8 @@
             "codexRunCompleted": "Codex finished the current turn",
             "codexRunAborted": "Codex stopped the current turn",
             "codexRunAbortedWithReason": "Codex stopped the current turn: {{reason}}",
-            "opencodeRunCompleted": "OpenCode finished the current turn"
+            "opencodeRunCompleted": "OpenCode finished the current turn",
+            "mimocodeRunCompleted": "MiMoCode finished the current turn"
         }
     }
 }
