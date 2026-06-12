@@ -23,36 +23,6 @@ fn sqlite_offset_key(db_path: &std::path::Path) -> String {
     format!("sqlite:{}", db_path.to_string_lossy())
 }
 
-fn insert_logs_and_update_offset(
-    write_tx: &Sender<WriteRequest>,
-    logs: Vec<crate::adapters::TokenLog>,
-    file_path: String,
-    offset: u64,
-) -> bool {
-    let (result_tx, result_rx) = std::sync::mpsc::channel();
-    if let Err(e) = write_tx.send(WriteRequest::InsertTokenLogsAndUpdateOffset {
-        logs,
-        file_path,
-        offset,
-        result_tx,
-    }) {
-        log::warn!("发送日志与 offset 原子写入请求失败: {}", e);
-        return false;
-    }
-
-    match result_rx.recv() {
-        Ok(Ok(())) => true,
-        Ok(Err(e)) => {
-            log::warn!("日志与 offset 原子写入失败，将在下轮重试: {}", e);
-            false
-        }
-        Err(e) => {
-            log::warn!("等待日志与 offset 原子写入结果失败: {}", e);
-            false
-        }
-    }
-}
-
 fn mark_cold_start_complete(cold_start_complete: &Arc<AtomicBool>) {
     cold_start_complete.store(true, Ordering::Release);
 }
@@ -108,8 +78,13 @@ impl WatcherEngine {
                 if flag.load(Ordering::Relaxed) {
                     return;
                 }
-                let updated_offsets =
-                    cold_start_adapter(agent.as_ref(), &write_tx, config.keep_days, &known_offsets);
+                let updated_offsets = cold_start_adapter(
+                    agent.as_ref(),
+                    &write_tx,
+                    config.keep_days,
+                    &known_offsets,
+                    &db_path,
+                );
                 for (key, offset) in updated_offsets {
                     known_offsets.insert(key, offset);
                 }
@@ -198,8 +173,13 @@ pub fn catch_up_adapters(
     thread::spawn(move || {
         let mut known_offsets = offset::load_offsets_from_db(&db_path);
         for agent in agents {
-            let updated_offsets =
-                cold_start_adapter(agent.as_ref(), &write_tx, keep_days, &known_offsets);
+            let updated_offsets = cold_start_adapter(
+                agent.as_ref(),
+                &write_tx,
+                keep_days,
+                &known_offsets,
+                &db_path,
+            );
             for (key, offset) in updated_offsets {
                 known_offsets.insert(key, offset);
             }
@@ -213,6 +193,7 @@ fn cold_start_adapter(
     write_tx: &Sender<WriteRequest>,
     keep_days: u32,
     known_offsets: &std::collections::HashMap<String, u64>,
+    local_db_path: &std::path::Path,
 ) -> Vec<(String, u64)> {
     let agent_name = agent.agent_name();
 
@@ -224,54 +205,24 @@ fn cold_start_adapter(
             cold_start_file_source(agent, write_tx, keep_days, known_offsets, paths, false)
         }
         DataSource::Sqlite { db_path } => {
-            let mut updated_offsets = Vec::new();
             if db_path.exists() {
                 let offset_key = sqlite_offset_key(&db_path);
                 let since = known_offsets.get(&offset_key).copied();
                 log::info!(
-                    "[冷启动] {}: 查询外部 SQLite {} since={:?}",
+                    "[冷启动] {}: 处理外部 SQLite {} old_watermark={:?}",
                     agent_name,
                     db_path.display(),
                     since
                 );
-                match agent.query_sqlite_rows(&db_path, since) {
-                    Ok(row_batch) => {
-                        let high_watermark = row_batch.high_watermark;
-                        let batch = AgentDataBatch::SqliteRows {
-                            agent_name: agent_name.to_string(),
-                            source_key: offset_key.clone(),
-                            db_path: db_path.clone(),
-                            rows: row_batch.rows,
-                            previous_watermark: since,
-                            next_watermark: high_watermark,
-                        };
-                        let logs = agent.extract_tokens(&batch).logs;
-                        log::info!("[冷启动] {} 完成: {} 条记录", agent_name, logs.len());
-                        let has_logs = !logs.is_empty();
-                        match high_watermark {
-                            Some(offset) if has_logs => {
-                                if !insert_logs_and_update_offset(
-                                    write_tx,
-                                    logs,
-                                    offset_key.clone(),
-                                    offset,
-                                ) {
-                                    return updated_offsets;
-                                }
-                                updated_offsets.push((offset_key, offset));
-                            }
-                            Some(offset) => {
-                                let _ = write_tx.send(WriteRequest::UpdateOffset {
-                                    file_path: offset_key.clone(),
-                                    offset,
-                                });
-                                updated_offsets.push((offset_key, offset));
-                            }
-                            None if has_logs => {
-                                let _ = write_tx.send(WriteRequest::InsertTokenLogs(logs));
-                            }
-                            None => {}
-                        }
+                match sqlite_strategy::cold_start_sqlite_source(
+                    agent,
+                    &db_path,
+                    local_db_path,
+                    write_tx,
+                    since,
+                ) {
+                    Ok(count) => {
+                        log::info!("[冷启动] {} 完成: {} 条 SQLite row", agent_name, count);
                     }
                     Err(e) => {
                         log::warn!("[冷启动] {}: SQLite 查询失败: {}", agent_name, e);
@@ -280,7 +231,7 @@ fn cold_start_adapter(
             } else {
                 log::info!("[冷启动] {}: 数据库不存在, 跳过", agent_name);
             }
-            updated_offsets
+            Vec::new()
         }
     }
 }
@@ -407,7 +358,7 @@ fn start_watchers(
     write_tx: &Sender<WriteRequest>,
     stop_flag: &Arc<AtomicBool>,
     config: &WatcherConfig,
-    _db_path: &std::path::Path,
+    local_db_path: &std::path::Path,
     known_offsets: &std::collections::HashMap<String, u64>,
     behavior: Option<&BehaviorRuntime>,
 ) {
@@ -496,6 +447,7 @@ fn start_watchers(
             let tx = write_tx.clone();
             let flag = stop_flag.clone();
             let dp = adapter_db_path.clone();
+            let local_dp = local_db_path.to_path_buf();
             let name = agent.agent_name().to_string();
             let initial_offset = known_offsets
                 .get(&sqlite_offset_key(adapter_db_path))
@@ -506,6 +458,7 @@ fn start_watchers(
                 sqlite_strategy::run_sqlite_polling(
                     name,
                     dp,
+                    local_dp,
                     tx,
                     flag,
                     poll_secs,
@@ -600,8 +553,14 @@ mod tests {
         };
         let (write_tx, _write_rx) = std::sync::mpsc::channel();
 
-        let updated_offsets =
-            cold_start_adapter(&agent, &write_tx, 365, &std::collections::HashMap::new());
+        let local_db_path = dir.path().join("local.db");
+        let updated_offsets = cold_start_adapter(
+            &agent,
+            &write_tx,
+            365,
+            &std::collections::HashMap::new(),
+            &local_db_path,
+        );
 
         assert_eq!(updated_offsets.len(), 1);
         assert_eq!(token_calls.load(Ordering::Relaxed), 1);

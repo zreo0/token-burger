@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use rusqlite::{params, params_from_iter, Connection};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 
-use crate::adapters::TokenLog;
+use crate::adapters::{ExternalSqliteCursor, TokenLog};
 use crate::types::{AppSettings, TokenSummary};
 
 const BATCH_SIZE: usize = 1000;
@@ -26,6 +26,24 @@ const INSERT_TOKEN_LOG_SQL: &str = "
     WHERE token_logs.agent_name = 'codex' AND token_logs.model_id = 'codex'
 ";
 
+const UPSERT_TOKEN_LOG_SQL: &str = "
+    INSERT INTO token_logs
+    (agent_name, provider, model_id, token_type, token_count,
+     session_id, request_id, latency_ms, is_error, metadata, cost, timestamp)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+    ON CONFLICT(request_id, token_type) DO UPDATE SET
+        agent_name = excluded.agent_name,
+        provider = excluded.provider,
+        model_id = excluded.model_id,
+        token_count = excluded.token_count,
+        session_id = excluded.session_id,
+        latency_ms = excluded.latency_ms,
+        is_error = excluded.is_error,
+        metadata = excluded.metadata,
+        cost = excluded.cost,
+        timestamp = excluded.timestamp
+";
+
 pub fn get_enabled_agents(conn: &Connection) -> Vec<String> {
     let defaults = AppSettings::default();
     let enabled_str = get_setting(conn, "enabled_agents").unwrap_or(None);
@@ -36,8 +54,12 @@ pub fn get_enabled_agents(conn: &Connection) -> Vec<String> {
     }
 }
 
-fn insert_token_log_chunk(conn: &Connection, logs: &[TokenLog]) -> Result<(), rusqlite::Error> {
-    let mut stmt = conn.prepare_cached(INSERT_TOKEN_LOG_SQL)?;
+fn insert_token_log_chunk(
+    conn: &Connection,
+    logs: &[TokenLog],
+    sql: &str,
+) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare_cached(sql)?;
 
     for log in logs {
         let token_type_str = serde_json::to_value(&log.token_type)
@@ -71,13 +93,14 @@ pub fn batch_insert_token_logs(
 ) -> Result<(), rusqlite::Error> {
     for chunk in logs.chunks(BATCH_SIZE) {
         let tx = conn.unchecked_transaction()?;
-        insert_token_log_chunk(&tx, chunk)?;
+        insert_token_log_chunk(&tx, chunk, INSERT_TOKEN_LOG_SQL)?;
         tx.commit()?;
     }
     Ok(())
 }
 
 /// 批量插入 TokenLog 并在同一事务内推进 offset。
+#[allow(dead_code)]
 pub fn batch_insert_token_logs_and_update_offset(
     conn: &Connection,
     logs: &[TokenLog],
@@ -87,9 +110,26 @@ pub fn batch_insert_token_logs_and_update_offset(
     let tx = conn.unchecked_transaction()?;
 
     for chunk in logs.chunks(BATCH_SIZE) {
-        insert_token_log_chunk(&tx, chunk)?;
+        insert_token_log_chunk(&tx, chunk, INSERT_TOKEN_LOG_SQL)?;
     }
     update_offset(&tx, file_path, offset)?;
+
+    tx.commit()?;
+    Ok(())
+}
+
+/// 批量插入 TokenLog 并在同一事务内推进外部 SQLite cursor。
+pub fn batch_insert_token_logs_and_update_sqlite_cursors(
+    conn: &Connection,
+    logs: &[TokenLog],
+    cursors: &[ExternalSqliteCursor],
+) -> Result<(), rusqlite::Error> {
+    let tx = conn.unchecked_transaction()?;
+
+    for chunk in logs.chunks(BATCH_SIZE) {
+        insert_token_log_chunk(&tx, chunk, UPSERT_TOKEN_LOG_SQL)?;
+    }
+    upsert_external_sqlite_cursors(&tx, cursors)?;
 
     tx.commit()?;
     Ok(())
@@ -272,8 +312,101 @@ pub fn clear_data(conn: &Connection, keep_days: Option<u32>) -> Result<(), rusql
         None => {
             conn.execute("DELETE FROM token_logs", [])?;
             conn.execute("DELETE FROM file_offsets", [])?;
+            conn.execute("DELETE FROM external_sqlite_cursors", [])?;
         }
     }
+    Ok(())
+}
+
+/// 判断指定外部 SQLite source 是否已经建立 per-session cursor。
+#[allow(dead_code)]
+pub fn has_external_sqlite_cursors(
+    conn: &Connection,
+    source_key: &str,
+) -> Result<bool, rusqlite::Error> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM external_sqlite_cursors WHERE source_key = ?1",
+        params![source_key],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+/// 读取指定外部 SQLite source 的全部 session cursor。
+pub fn get_external_sqlite_cursors(
+    conn: &Connection,
+    source_key: &str,
+) -> Result<Vec<ExternalSqliteCursor>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT source_key, session_id, created_time, created_id, updated_time
+         FROM external_sqlite_cursors
+         WHERE source_key = ?1
+         ORDER BY session_id ASC",
+    )?;
+    let rows = stmt.query_map(params![source_key], |row| {
+        Ok(ExternalSqliteCursor {
+            source_key: row.get(0)?,
+            session_id: row.get(1)?,
+            created_time: row.get(2)?,
+            created_id: row.get(3)?,
+            updated_time: row.get(4)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+/// 读取指定外部 SQLite source/session 的 cursor。
+#[allow(dead_code)]
+pub fn get_external_sqlite_cursor(
+    conn: &Connection,
+    source_key: &str,
+    session_id: &str,
+) -> Result<Option<ExternalSqliteCursor>, rusqlite::Error> {
+    conn.query_row(
+        "SELECT source_key, session_id, created_time, created_id, updated_time
+         FROM external_sqlite_cursors
+         WHERE source_key = ?1 AND session_id = ?2",
+        params![source_key, session_id],
+        |row| {
+            Ok(ExternalSqliteCursor {
+                source_key: row.get(0)?,
+                session_id: row.get(1)?,
+                created_time: row.get(2)?,
+                created_id: row.get(3)?,
+                updated_time: row.get(4)?,
+            })
+        },
+    )
+    .optional()
+}
+
+/// 批量 upsert 外部 SQLite source 的 per-session cursor。
+pub fn upsert_external_sqlite_cursors(
+    conn: &Connection,
+    cursors: &[ExternalSqliteCursor],
+) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare_cached(
+        "INSERT INTO external_sqlite_cursors
+         (source_key, session_id, created_time, created_id, updated_time, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
+         ON CONFLICT(source_key, session_id) DO UPDATE SET
+             created_time = excluded.created_time,
+             created_id = excluded.created_id,
+             updated_time = excluded.updated_time,
+             updated_at = CURRENT_TIMESTAMP",
+    )?;
+
+    for cursor in cursors {
+        stmt.execute(params![
+            cursor.source_key,
+            cursor.session_id,
+            cursor.created_time,
+            cursor.created_id,
+            cursor.updated_time,
+        ])?;
+    }
+
     Ok(())
 }
 
@@ -429,7 +562,6 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM token_logs", [], |row| row.get(0))
             .unwrap();
-        // 第三条重复应保持原有忽略语义，不新增行
         assert_eq!(count, 2);
 
         let updated: (String, i64) = conn
@@ -638,6 +770,79 @@ mod tests {
     }
 
     #[test]
+    fn test_external_sqlite_cursor_crud() {
+        let conn = setup_db();
+        let source_key = "sqlite:/tmp/opencode.db";
+        let cursor = ExternalSqliteCursor {
+            source_key: source_key.to_string(),
+            session_id: "session-1".to_string(),
+            created_time: 1000,
+            created_id: "msg-1".to_string(),
+            updated_time: 1200,
+        };
+
+        assert!(!has_external_sqlite_cursors(&conn, source_key).unwrap());
+        upsert_external_sqlite_cursors(&conn, &[cursor.clone()]).unwrap();
+        assert!(has_external_sqlite_cursors(&conn, source_key).unwrap());
+        assert_eq!(
+            get_external_sqlite_cursor(&conn, source_key, "session-1")
+                .unwrap()
+                .unwrap(),
+            cursor
+        );
+
+        let updated = ExternalSqliteCursor {
+            created_time: 2000,
+            created_id: "msg-2".to_string(),
+            updated_time: 2400,
+            ..cursor
+        };
+        upsert_external_sqlite_cursors(&conn, &[updated.clone()]).unwrap();
+
+        let cursors = get_external_sqlite_cursors(&conn, source_key).unwrap();
+        assert_eq!(cursors, vec![updated]);
+    }
+
+    #[test]
+    fn test_batch_insert_and_update_sqlite_cursors_updates_existing_logs() {
+        let conn = setup_db();
+        let mut first = make_log("mimocode", "mimo-v1", TokenType::Input, 100, "msg-1-input");
+        first.metadata = Some(r#"{"stage":"draft"}"#.to_string());
+        first.cost = Some(0.1);
+        let mut second = make_log("mimocode", "mimo-v1", TokenType::Input, 180, "msg-1-input");
+        second.metadata = Some(r#"{"stage":"final"}"#.to_string());
+        second.cost = Some(0.2);
+        let cursor = ExternalSqliteCursor {
+            source_key: "sqlite:/tmp/mimocode.db".to_string(),
+            session_id: "session-1".to_string(),
+            created_time: 2500,
+            created_id: "msg-1".to_string(),
+            updated_time: 3000,
+        };
+
+        batch_insert_token_logs(&conn, &[first]).unwrap();
+        batch_insert_token_logs_and_update_sqlite_cursors(&conn, &[second], &[cursor.clone()])
+            .unwrap();
+
+        let row: (i64, String, f64) = conn
+            .query_row(
+                "SELECT token_count, metadata, cost
+                 FROM token_logs
+                 WHERE request_id = 'msg-1-input' AND token_type = 'input'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (180, r#"{"stage":"final"}"#.to_string(), 0.2));
+        assert_eq!(
+            get_external_sqlite_cursor(&conn, "sqlite:/tmp/mimocode.db", "session-1")
+                .unwrap()
+                .unwrap(),
+            cursor
+        );
+    }
+
+    #[test]
     fn test_batch_insert_and_update_offset_atomic_success() {
         let conn = setup_db();
         let logs = vec![make_log(
@@ -686,6 +891,13 @@ mod tests {
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM file_offsets", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM external_sqlite_cursors", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(count, 0);
     }

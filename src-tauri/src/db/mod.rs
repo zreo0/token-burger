@@ -8,7 +8,7 @@ use chrono::{Datelike, LocalResult, TimeZone};
 use rusqlite::{Connection, OpenFlags};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::adapters::TokenLog;
+use crate::adapters::{ExternalSqliteCursor, TokenLog};
 use crate::types::TokenSummary;
 
 const MIDNIGHT_REFRESH_GRACE_SECS: u32 = 1;
@@ -47,6 +47,16 @@ CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS external_sqlite_cursors (
+    source_key TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    created_time INTEGER NOT NULL DEFAULT 0,
+    created_id TEXT NOT NULL DEFAULT '',
+    updated_time INTEGER NOT NULL DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(source_key, session_id)
 );
 ";
 
@@ -227,11 +237,10 @@ pub fn open_readonly(db_path: &PathBuf) -> Result<Connection, rusqlite::Error> {
 pub enum WriteRequest {
     /// 批量插入 token logs
     InsertTokenLogs(Vec<TokenLog>),
-    /// 批量插入 token logs，并在同一事务内更新 offset
-    InsertTokenLogsAndUpdateOffset {
+    /// 批量插入 token logs，并在同一事务内更新外部 SQLite cursor
+    InsertTokenLogsAndUpdateSqliteCursors {
         logs: Vec<TokenLog>,
-        file_path: String,
-        offset: u64,
+        cursors: Vec<ExternalSqliteCursor>,
         result_tx: mpsc::Sender<Result<(), String>>,
     },
     /// 清理数据（keep_days 为 None 表示清空全部）
@@ -305,10 +314,9 @@ impl DbManager {
                             }
                         }
                     }
-                    WriteRequest::InsertTokenLogsAndUpdateOffset {
+                    WriteRequest::InsertTokenLogsAndUpdateSqliteCursors {
                         logs,
-                        file_path,
-                        offset,
+                        cursors,
                         result_tx,
                     } => {
                         let count = logs.len();
@@ -321,35 +329,40 @@ impl DbManager {
                             .into_iter()
                             .collect();
                         log::info!(
-                            "[db] 写入 {} 条记录并更新 offset, agents={:?}, {} tokens, agent_cost=${:.4}",
+                            "[db] 写入 {} 条记录并更新 {} 个 SQLite cursor, agents={:?}, {} tokens, agent_cost=${:.4}",
                             count,
+                            cursors.len(),
                             agents,
                             total_tokens,
                             total_cost
                         );
-                        if let Err(e) = queries::batch_insert_token_logs_and_update_offset(
-                            &conn, &logs, &file_path, offset,
+                        if let Err(e) = queries::batch_insert_token_logs_and_update_sqlite_cursors(
+                            &conn, &logs, &cursors,
                         ) {
                             let message = e.to_string();
-                            log::error!("批量插入并更新 offset 失败: {}", message);
+                            log::error!("批量插入并更新 SQLite cursor 失败: {}", message);
                             let _ = result_tx.send(Err(message));
                             continue;
                         }
                         let _ = result_tx.send(Ok(()));
 
-                        // 入库后查询今日汇总并广播
-                        let enabled_agents = queries::get_enabled_agents(&conn);
-                        match queries::get_token_summary_for_agents(&conn, "today", &enabled_agents)
-                        {
-                            Ok(summary) => {
-                                log::info!(
-                                    "[db] 今日汇总: total={}, input={}, output={}, cache_read={}, cache_create={}, agent_cost=${:.2}",
-                                    summary.total, summary.input, summary.output, summary.cache_read, summary.cache_create, summary.agent_cost
-                                );
-                                emit_token_summary(&app_handle, &conn, &summary);
-                            }
-                            Err(e) => {
-                                log::error!("查询汇总失败: {}", e);
+                        if !logs.is_empty() {
+                            let enabled_agents = queries::get_enabled_agents(&conn);
+                            match queries::get_token_summary_for_agents(
+                                &conn,
+                                "today",
+                                &enabled_agents,
+                            ) {
+                                Ok(summary) => {
+                                    log::info!(
+                                        "[db] 今日汇总: total={}, input={}, output={}, cache_read={}, cache_create={}, agent_cost=${:.2}",
+                                        summary.total, summary.input, summary.output, summary.cache_read, summary.cache_create, summary.agent_cost
+                                    );
+                                    emit_token_summary(&app_handle, &conn, &summary);
+                                }
+                                Err(e) => {
+                                    log::error!("查询汇总失败: {}", e);
+                                }
                             }
                         }
                     }
@@ -383,7 +396,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(SCHEMA_SQL).unwrap();
 
-        // 验证三张表存在
+        // 验证基础表存在
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM token_logs", [], |row| row.get(0))
             .unwrap();
@@ -396,6 +409,13 @@ mod tests {
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM app_settings", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM external_sqlite_cursors", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(count, 0);
     }

@@ -1,7 +1,9 @@
 use super::{
-    AgentDataBatch, AgentSource, BehaviorExtractor, DataSource, SqliteMessageRow, SqliteRowBatch,
-    TokenExtraction, TokenExtractor, TokenLog, TokenType,
+    AgentDataBatch, AgentSource, BehaviorExtractor, DataSource, SqliteCreatedCursor,
+    SqliteMessageRow, SqliteRowBatch, TokenExtraction, TokenExtractor, TokenLog, TokenType,
+    SQLITE_NULL_SESSION_ID,
 };
+use rusqlite::OptionalExtension;
 use std::path::{Path, PathBuf};
 
 use crate::behavior;
@@ -45,6 +47,43 @@ impl AgentSource for OpenCodeAdapter {
         since: Option<u64>,
     ) -> Result<SqliteRowBatch, Box<dyn std::error::Error>> {
         query_message_rows(db_path, since)
+    }
+
+    fn list_sqlite_session_ids(
+        &self,
+        conn: &rusqlite::Connection,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        list_session_ids(conn)
+    }
+
+    fn query_sqlite_rows_by_created_cursor(
+        &self,
+        conn: &rusqlite::Connection,
+        session_id: &str,
+        time_created: i64,
+        id: &str,
+        limit: usize,
+    ) -> Result<SqliteRowBatch, Box<dyn std::error::Error>> {
+        query_message_rows_by_created_cursor(conn, session_id, time_created, id, limit)
+    }
+
+    fn query_sqlite_rows_by_updated_cursor(
+        &self,
+        conn: &rusqlite::Connection,
+        session_id: &str,
+        since_updated: i64,
+        limit: usize,
+    ) -> Result<SqliteRowBatch, Box<dyn std::error::Error>> {
+        query_message_rows_by_updated_cursor(conn, session_id, since_updated, limit)
+    }
+
+    fn query_sqlite_created_cursor_before_watermark(
+        &self,
+        conn: &rusqlite::Connection,
+        session_id: &str,
+        watermark: u64,
+    ) -> Result<Option<SqliteCreatedCursor>, Box<dyn std::error::Error>> {
+        query_created_cursor_before_watermark(conn, session_id, watermark)
     }
 }
 
@@ -106,6 +145,7 @@ pub(crate) fn parse_opencode_json_content(content: &str) -> Vec<TokenLog> {
 }
 
 /// 查询 OpenCode SQLite message row
+#[allow(dead_code)]
 pub(crate) fn query_message_rows(
     db_path: &Path,
     since: Option<u64>,
@@ -148,6 +188,214 @@ pub(crate) fn query_message_rows(
         rows: message_rows,
         high_watermark,
     })
+}
+
+/// 列出 OpenCode message 表中已知 session id
+pub(crate) fn list_session_ids(
+    conn: &rusqlite::Connection,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    if let Ok(mut stmt) = conn.prepare("SELECT id FROM session ORDER BY id ASC") {
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        return rows.collect::<Result<Vec<_>, _>>().map_err(Into::into);
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT COALESCE(session_id, ?1)
+         FROM message
+         ORDER BY 1 ASC",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![SQLITE_NULL_SESSION_ID], |row| {
+        row.get::<_, String>(0)
+    })?;
+
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+/// 按 session created cursor 查询 OpenCode message row
+pub(crate) fn query_message_rows_by_created_cursor(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    time_created: i64,
+    id: &str,
+    limit: usize,
+) -> Result<SqliteRowBatch, Box<dyn std::error::Error>> {
+    let watermark_column = opencode_watermark_column(conn)?;
+    let limit = limit.min(i64::MAX as usize) as i64;
+
+    let mut message_rows = Vec::new();
+    let mut high_watermark = None;
+
+    if session_id == SQLITE_NULL_SESSION_ID {
+        let sql = format!(
+            "SELECT id, session_id, data, time_created, {watermark_column} FROM message
+             WHERE session_id IS NULL
+               AND (time_created > ?1 OR (time_created = ?2 AND id > ?3))
+             ORDER BY time_created ASC, id ASC
+             LIMIT ?4"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(
+            rusqlite::params![time_created, time_created, id, limit],
+            |row| {
+                Ok(SqliteMessageRow {
+                    id: row.get::<_, String>(0)?,
+                    session_id: row.get::<_, Option<String>>(1)?,
+                    data: row.get::<_, String>(2)?,
+                    time_created: row.get::<_, i64>(3)?,
+                    watermark: row.get::<_, i64>(4)?,
+                })
+            },
+        )?;
+        collect_rows(rows, &mut message_rows, &mut high_watermark)?;
+    } else {
+        let sql = format!(
+            "SELECT id, session_id, data, time_created, {watermark_column} FROM message
+             WHERE session_id = ?1
+               AND (time_created > ?2 OR (time_created = ?3 AND id > ?4))
+             ORDER BY time_created ASC, id ASC
+             LIMIT ?5"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(
+            rusqlite::params![session_id, time_created, time_created, id, limit],
+            |row| {
+                Ok(SqliteMessageRow {
+                    id: row.get::<_, String>(0)?,
+                    session_id: row.get::<_, Option<String>>(1)?,
+                    data: row.get::<_, String>(2)?,
+                    time_created: row.get::<_, i64>(3)?,
+                    watermark: row.get::<_, i64>(4)?,
+                })
+            },
+        )?;
+        collect_rows(rows, &mut message_rows, &mut high_watermark)?;
+    }
+
+    Ok(SqliteRowBatch {
+        rows: message_rows,
+        high_watermark,
+    })
+}
+
+/// 按 session updated cursor 查询 OpenCode message row
+pub(crate) fn query_message_rows_by_updated_cursor(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    since_updated: i64,
+    limit: usize,
+) -> Result<SqliteRowBatch, Box<dyn std::error::Error>> {
+    let watermark_column = opencode_watermark_column(conn)?;
+    let limit = limit.min(i64::MAX as usize) as i64;
+
+    let mut message_rows = Vec::new();
+    let mut high_watermark = None;
+
+    if session_id == SQLITE_NULL_SESSION_ID {
+        let sql = format!(
+            "SELECT id, session_id, data, time_created, {watermark_column} FROM message
+             WHERE session_id IS NULL AND {watermark_column} >= ?1
+             ORDER BY {watermark_column} ASC, id ASC
+             LIMIT ?2"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params![since_updated, limit], |row| {
+            Ok(SqliteMessageRow {
+                id: row.get::<_, String>(0)?,
+                session_id: row.get::<_, Option<String>>(1)?,
+                data: row.get::<_, String>(2)?,
+                time_created: row.get::<_, i64>(3)?,
+                watermark: row.get::<_, i64>(4)?,
+            })
+        })?;
+        collect_rows(rows, &mut message_rows, &mut high_watermark)?;
+    } else {
+        let sql = format!(
+            "SELECT id, session_id, data, time_created, {watermark_column} FROM message
+             WHERE session_id = ?1 AND {watermark_column} >= ?2
+             ORDER BY {watermark_column} ASC, id ASC
+             LIMIT ?3"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params![session_id, since_updated, limit], |row| {
+            Ok(SqliteMessageRow {
+                id: row.get::<_, String>(0)?,
+                session_id: row.get::<_, Option<String>>(1)?,
+                data: row.get::<_, String>(2)?,
+                time_created: row.get::<_, i64>(3)?,
+                watermark: row.get::<_, i64>(4)?,
+            })
+        })?;
+        collect_rows(rows, &mut message_rows, &mut high_watermark)?;
+    }
+
+    Ok(SqliteRowBatch {
+        rows: message_rows,
+        high_watermark,
+    })
+}
+
+/// 查询旧 global watermark 前最后一条 OpenCode message created cursor
+pub(crate) fn query_created_cursor_before_watermark(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    watermark: u64,
+) -> Result<Option<SqliteCreatedCursor>, Box<dyn std::error::Error>> {
+    let watermark_column = opencode_watermark_column(&conn)?;
+    let watermark = watermark.min(i64::MAX as u64) as i64;
+
+    let result = if session_id == SQLITE_NULL_SESSION_ID {
+        let sql = format!(
+            "SELECT time_created, id FROM message
+             WHERE session_id IS NULL AND {watermark_column} <= ?1
+             ORDER BY time_created DESC, id DESC
+             LIMIT 1"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        stmt.query_row(rusqlite::params![watermark], |row| {
+            Ok(SqliteCreatedCursor {
+                time_created: row.get(0)?,
+                id: row.get(1)?,
+            })
+        })
+        .optional()?
+    } else {
+        let sql = format!(
+            "SELECT time_created, id FROM message
+             WHERE session_id = ?1 AND {watermark_column} <= ?2
+             ORDER BY time_created DESC, id DESC
+             LIMIT 1"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        stmt.query_row(rusqlite::params![session_id, watermark], |row| {
+            Ok(SqliteCreatedCursor {
+                time_created: row.get(0)?,
+                id: row.get(1)?,
+            })
+        })
+        .optional()?
+    };
+
+    Ok(result)
+}
+
+fn collect_rows<F>(
+    rows: rusqlite::MappedRows<'_, F>,
+    message_rows: &mut Vec<SqliteMessageRow>,
+    high_watermark: &mut Option<u64>,
+) -> Result<(), rusqlite::Error>
+where
+    F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<SqliteMessageRow>,
+{
+    for row in rows {
+        let row = row?;
+        if row.watermark >= 0 {
+            let ts = row.watermark as u64;
+            *high_watermark = Some((*high_watermark).map_or(ts, |prev| prev.max(ts)));
+        }
+        message_rows.push(row);
+    }
+
+    Ok(())
 }
 
 fn opencode_watermark_column(conn: &rusqlite::Connection) -> Result<&'static str, rusqlite::Error> {
@@ -500,5 +748,78 @@ mod tests {
         assert_eq!(behavior_events.len(), 1);
         assert_eq!(high_watermark, Some(3000));
         assert_eq!(behavior_events[0].session_id, "session-1");
+    }
+
+    #[test]
+    fn test_created_cursor_query_uses_session_time_created_id_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("opencode.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE message (
+                id TEXT NOT NULL,
+                session_id TEXT,
+                data TEXT NOT NULL,
+                time_created INTEGER NOT NULL,
+                time_updated INTEGER NOT NULL
+            );
+            CREATE INDEX message_session_time_created_id_idx
+                ON message(session_id, time_created, id);",
+        )
+        .unwrap();
+        for (id, time_created, time_updated) in [
+            ("msg-a", 1000i64, 1100i64),
+            ("msg-b", 1000i64, 1200i64),
+            ("msg-c", 2000i64, 2100i64),
+        ] {
+            conn.execute(
+                "INSERT INTO message (id, session_id, data, time_created, time_updated)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    id,
+                    "session-1",
+                    r#"{"role":"assistant","tokens":{"input":1}}"#,
+                    time_created,
+                    time_updated,
+                ],
+            )
+            .unwrap();
+        }
+
+        let mut stmt = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT id, session_id, data, time_created, time_updated FROM message
+                 WHERE session_id = ?1
+                   AND (time_created > ?2 OR (time_created = ?3 AND id > ?4))
+                 ORDER BY time_created ASC, id ASC
+                 LIMIT ?5",
+            )
+            .unwrap();
+        let details = stmt
+            .query_map(
+                rusqlite::params!["session-1", 1000i64, 1000i64, "msg-a", 10i64],
+                |row| row.get::<_, String>(3),
+            )
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n");
+        assert!(
+            details.contains("message_session_time_created_id_idx"),
+            "unexpected query plan: {details}"
+        );
+        drop(stmt);
+
+        let row_batch =
+            query_message_rows_by_created_cursor(&conn, "session-1", 1000, "msg-a", 10).unwrap();
+        let ids = row_batch
+            .rows
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["msg-b", "msg-c"]);
+        assert_eq!(row_batch.high_watermark, Some(2100));
     }
 }

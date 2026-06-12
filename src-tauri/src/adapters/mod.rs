@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 
 use crate::behavior::AgentBehaviorEvent;
 
+pub const SQLITE_NULL_SESSION_ID: &str = "__token_burger_null_session__";
+
 /// Agent 日志数据源类型
 #[derive(Debug, Clone)]
 pub enum DataSource {
@@ -57,6 +59,36 @@ pub struct SqliteMessageRow {
     pub data: String,
     pub time_created: i64,
     pub watermark: i64,
+}
+
+/// 外部 SQLite message 表的 created cursor
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SqliteCreatedCursor {
+    pub time_created: i64,
+    pub id: String,
+}
+
+/// 本地持久化的外部 SQLite session cursor
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalSqliteCursor {
+    pub source_key: String,
+    pub session_id: String,
+    pub created_time: i64,
+    pub created_id: String,
+    pub updated_time: i64,
+}
+
+impl ExternalSqliteCursor {
+    /// 创建指定 source/session 的空 cursor
+    pub fn empty(source_key: &str, session_id: &str) -> Self {
+        Self {
+            source_key: source_key.to_string(),
+            session_id: session_id.to_string(),
+            created_time: 0,
+            created_id: String::new(),
+            updated_time: 0,
+        }
+    }
 }
 
 /// 外部 SQLite source 的一次增量查询结果
@@ -165,12 +197,54 @@ pub trait AgentSource: Send + Sync {
     fn log_paths(&self) -> Vec<String>;
 
     /// 查询外部 SQLite 数据库，since 为上次查询的源数据水位线
+    #[allow(dead_code)]
     fn query_sqlite_rows(
         &self,
         _db_path: &Path,
         _since: Option<u64>,
     ) -> Result<SqliteRowBatch, Box<dyn std::error::Error>> {
         Err("此 Agent source 不支持 SQLite 查询".into())
+    }
+
+    /// 列出外部 SQLite message 表中已知 session id
+    fn list_sqlite_session_ids(
+        &self,
+        _conn: &rusqlite::Connection,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        Err("此 Agent source 不支持 SQLite session 查询".into())
+    }
+
+    /// 按 session created cursor 查询新建 message row
+    fn query_sqlite_rows_by_created_cursor(
+        &self,
+        _conn: &rusqlite::Connection,
+        _session_id: &str,
+        _time_created: i64,
+        _id: &str,
+        _limit: usize,
+    ) -> Result<SqliteRowBatch, Box<dyn std::error::Error>> {
+        Err("此 Agent source 不支持 SQLite created cursor 查询".into())
+    }
+
+    /// 按 session updated cursor 查询可能被更新的 message row
+    fn query_sqlite_rows_by_updated_cursor(
+        &self,
+        _conn: &rusqlite::Connection,
+        _session_id: &str,
+        _since_updated: i64,
+        _limit: usize,
+    ) -> Result<SqliteRowBatch, Box<dyn std::error::Error>> {
+        Err("此 Agent source 不支持 SQLite updated cursor 查询".into())
+    }
+
+    /// 查询旧全局 watermark 之前的最后一条 created cursor
+    fn query_sqlite_created_cursor_before_watermark(
+        &self,
+        _conn: &rusqlite::Connection,
+        _session_id: &str,
+        _watermark: u64,
+    ) -> Result<Option<SqliteCreatedCursor>, Box<dyn std::error::Error>> {
+        Err("此 Agent source 不支持 SQLite cursor bootstrap 查询".into())
     }
 }
 
