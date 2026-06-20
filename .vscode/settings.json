@@ -9,5 +9,6 @@
         "mkdir": true,
         "exit": true,
         "mv": true
-    }
+    },
+    "js/ts.tsdk.path": "node_modules/typescript/lib"
 }
