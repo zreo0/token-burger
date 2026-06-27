@@ -4,8 +4,23 @@ use serde_json::Value;
 
 use super::{AgentBehaviorEvent, AgentBehaviorKind};
 
+const SESSION_META_SCAN_LINES: usize = 8;
+
 /// 从 Codex JSONL 增量内容中解析行为事件
 pub fn parse_events(content: &str, session_hint: &str) -> Vec<AgentBehaviorEvent> {
+    parse_events_with_context(content, session_hint, None)
+}
+
+/// 从 Codex JSONL 增量内容中解析行为事件，并用完整上下文识别会话类型
+pub fn parse_events_with_context(
+    content: &str,
+    session_hint: &str,
+    context: Option<&str>,
+) -> Vec<AgentBehaviorEvent> {
+    if context.is_some_and(is_auto_review_session) || is_auto_review_session(content) {
+        return Vec::new();
+    }
+
     let session_id = compact_session_id(session_hint);
     let fallback_ts = chrono::Local::now()
         .format("%Y-%m-%dT%H:%M:%S%:z")
@@ -29,6 +44,32 @@ pub fn parse_events(content: &str, session_hint: &str) -> Vec<AgentBehaviorEvent
     }
 
     events
+}
+
+fn is_auto_review_session(content: &str) -> bool {
+    content
+        .lines()
+        .take(SESSION_META_SCAN_LINES)
+        .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+        .any(|value| {
+            value.get("type").and_then(Value::as_str) == Some("session_meta")
+                && value
+                    .get("payload")
+                    .is_some_and(session_meta_is_auto_review)
+        })
+}
+
+fn session_meta_is_auto_review(payload: &Value) -> bool {
+    payload.get("thread_source").and_then(Value::as_str) == Some("subagent")
+        && source_subagent_name(payload) == Some("guardian")
+}
+
+fn source_subagent_name(payload: &Value) -> Option<&str> {
+    let subagent = payload.get("source")?.get("subagent")?;
+
+    subagent
+        .as_str()
+        .or_else(|| subagent.get("other").and_then(Value::as_str))
 }
 
 fn parse_line(value: &Value, session_id: &str, fallback_ts: &str) -> Option<AgentBehaviorEvent> {
@@ -229,6 +270,27 @@ mod tests {
             .unwrap()
             .contains("secret"));
         assert_eq!(events[1].kind, AgentBehaviorKind::PermissionResolved);
+    }
+
+    #[test]
+    fn skips_auto_review_guardian_session_events() {
+        let content = r#"{"timestamp":"2026-06-01T10:00:00Z","type":"session_meta","payload":{"thread_source":"subagent","source":{"subagent":{"other":"guardian"}}}}
+{"timestamp":"2026-06-01T10:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+{"timestamp":"2026-06-01T10:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}"#;
+
+        let events = parse_events(content, "guardian-session");
+
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn skips_auto_review_events_when_meta_is_only_in_context() {
+        let context = r#"{"timestamp":"2026-06-01T10:00:00Z","type":"session_meta","payload":{"thread_source":"subagent","source":{"subagent":"guardian"}}}"#;
+        let content = r#"{"timestamp":"2026-06-01T10:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}"#;
+
+        let events = parse_events_with_context(content, "guardian-session", Some(context));
+
+        assert!(events.is_empty());
     }
 
     #[test]

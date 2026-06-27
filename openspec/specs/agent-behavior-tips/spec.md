@@ -34,7 +34,7 @@
 - **THEN** payload 不包含 prompt、完整工具输出、完整命令参数或凭据值
 
 ### Requirement: Codex 行为解析
-系统 SHALL 从 Codex JSONL 增量内容中解析行为信号。`task_started` MUST 解析为内部新轮次开始；`exec_command` 的 `sandbox_permissions = "require_escalated"` MUST 解析为权限请求；同一 `call_id` 的 `function_call_output` MUST 解析为权限已处理；`task_complete` MUST 解析为任务完成；`turn_aborted` MUST 解析为任务中断。时间 MUST 优先使用 JSONL 顶层 `timestamp`。
+系统 SHALL 从 Codex JSONL 增量内容中解析行为信号。`task_started` MUST 解析为内部新轮次开始；`exec_command` 的 `sandbox_permissions = "require_escalated"` MUST 解析为权限请求；同一 `call_id` 的 `function_call_output` MUST 解析为权限已处理；`task_complete` MUST 解析为待确认的任务完成；`turn_aborted` MUST 解析为任务中断。时间 MUST 优先使用 JSONL 顶层 `timestamp`。系统 MUST 忽略 Codex 自动审批 `guardian` 子线程的行为事件。
 
 #### Scenario: 解析新轮次开始
 - **WHEN** Codex JSONL 新增 `event_msg` 且 payload type 为 `task_started`
@@ -50,7 +50,11 @@
 
 #### Scenario: 解析任务完成
 - **WHEN** Codex JSONL 新增 `event_msg` 且 payload type 为 `task_complete`
-- **THEN** 系统生成 `run_completed` 行为事件，并保留同一 `turn_id` 用于清理该轮仍存在的权限提醒
+- **THEN** 系统生成待确认的 `run_completed` 行为事件，并保留同一 `turn_id` 用于清理该轮仍存在的权限提醒
+
+#### Scenario: 忽略自动审批子线程
+- **WHEN** Codex JSONL 的 `session_meta` 表明 `thread_source = "subagent"` 且 `source.subagent` 为 `guardian`
+- **THEN** 系统不得从该 JSONL 生成 `turn_started`、`permission_requested` 或 `run_completed` 行为提示
 
 #### Scenario: 解析任务中断
 - **WHEN** Codex JSONL 新增 `event_msg` 且 payload type 为 `turn_aborted`
@@ -128,7 +132,7 @@
 - **THEN** 系统更新该提示而不是创建重复提示
 
 ### Requirement: 提示生命周期
-系统 SHALL 将行为提示视为轻量提醒而不是 Agent 状态。手动关闭 MUST 只移除当前提醒，不代表审批已处理，也不得产生状态标记。同一会话出现 `turn_started` 时，系统 MUST 清理该 `agent_name + session_id` 下所有旧提醒。完成和中断提醒 MUST 在 5 秒后自动隐藏；错误提醒 MUST 在 8 秒后自动隐藏；权限提醒不按时间自动隐藏，但可被手动关闭、同一 `call_id` 的 `permission_resolved` 或同会话新轮次清理。
+系统 SHALL 将行为提示视为轻量提醒而不是 Agent 状态。手动关闭 MUST 只移除当前提醒，不代表审批已处理，也不得产生状态标记。同一会话出现 `turn_started` 时，系统 MUST 清理该 `agent_name + session_id` 下所有旧提醒，并取消该会话待确认的完成提醒。完成提醒 MUST 经过短暂确认窗口后再展示；确认窗口内同一会话出现新 `turn_started` 时不得展示完成提醒。完成和中断提醒 MUST 在 5 秒后自动隐藏；错误提醒 MUST 在 8 秒后自动隐藏；权限提醒不按时间自动隐藏，但可被手动关闭、同一 `call_id` 的 `permission_resolved` 或同会话新轮次清理。
 
 #### Scenario: call_id resolved 自动关闭
 - **WHEN** 当前展示 Codex 权限提示，且系统收到同一 `agent_name + session_id + turn_id + call_id` 的 `permission_resolved`
@@ -145,6 +149,10 @@
 #### Scenario: 完成提醒自动隐藏
 - **WHEN** 系统展示 `run_completed` 或 `run_aborted` 提醒
 - **THEN** 该提醒在 5 秒后自动隐藏，并展示队列中的下一条提醒
+
+#### Scenario: 新轮次取消待确认完成提醒
+- **WHEN** 系统收到某会话的 `run_completed` 后，确认窗口内又收到同一会话的新 `turn_started`
+- **THEN** 系统取消该 `run_completed` 提醒，不展示轮次完成弹窗
 
 #### Scenario: 错误提醒自动隐藏
 - **WHEN** 系统展示 `tool_error` 提醒

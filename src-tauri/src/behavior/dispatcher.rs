@@ -9,12 +9,14 @@ use super::{tip_window, AgentBehaviorEvent, AgentBehaviorKind, BehaviorTip};
 
 const MAX_QUEUE_LEN: usize = 10;
 const MAIN_TRAY_ID: &str = "main";
+const RUN_COMPLETED_CONFIRM_MS: u64 = 2_000;
 
 /// 行为提示队列的展示状态
 #[derive(Debug, Default)]
 pub struct BehaviorQueue {
     current: Option<BehaviorTip>,
     queue: VecDeque<BehaviorTip>,
+    pending_completions: VecDeque<BehaviorTip>,
 }
 
 impl BehaviorQueue {
@@ -27,7 +29,11 @@ impl BehaviorQueue {
             AgentBehaviorKind::PermissionResolved => {
                 self.remove_permission(&event);
             }
-            AgentBehaviorKind::RunCompleted | AgentBehaviorKind::RunAborted => {
+            AgentBehaviorKind::RunCompleted => {
+                self.remove_turn(&event);
+                self.upsert_pending_completion(event.into());
+            }
+            AgentBehaviorKind::RunAborted => {
                 self.remove_turn(&event);
                 self.upsert_tip(event.into());
             }
@@ -36,6 +42,24 @@ impl BehaviorQueue {
             }
         }
 
+        self.current.clone()
+    }
+
+    /// 确认待展示的完成提醒并返回当前展示状态
+    pub fn confirm_pending_completion(&mut self, key: &str) -> Option<BehaviorTip> {
+        let Some(index) = self
+            .pending_completions
+            .iter()
+            .position(|tip| tip.key == key)
+        else {
+            return self.current.clone();
+        };
+
+        let Some(tip) = self.pending_completions.remove(index) else {
+            return self.current.clone();
+        };
+
+        self.upsert_tip(tip);
         self.current.clone()
     }
 
@@ -61,10 +85,17 @@ impl BehaviorQueue {
         self.current.clone()
     }
 
+    /// 读取待确认完成提醒数量
+    #[cfg(test)]
+    pub fn pending_completion_count(&self) -> usize {
+        self.pending_completions.len()
+    }
+
     /// 清空所有提示
     pub fn clear(&mut self) {
         self.current = None;
         self.queue.clear();
+        self.pending_completions.clear();
     }
 
     fn upsert_tip(&mut self, tip: BehaviorTip) {
@@ -97,6 +128,22 @@ impl BehaviorQueue {
         }
     }
 
+    fn upsert_pending_completion(&mut self, tip: BehaviorTip) {
+        if let Some(existing) = self
+            .pending_completions
+            .iter_mut()
+            .find(|existing| existing.key == tip.key)
+        {
+            *existing = tip;
+            return;
+        }
+
+        self.pending_completions.push_back(tip);
+        while self.pending_completions.len() > MAX_QUEUE_LEN {
+            self.pending_completions.pop_front();
+        }
+    }
+
     fn remove_session(&mut self, agent_name: &str, session_id: &str) {
         if self
             .current
@@ -107,6 +154,8 @@ impl BehaviorQueue {
         }
 
         self.queue
+            .retain(|tip| !(tip.agent_name == agent_name && tip.session_id == session_id));
+        self.pending_completions
             .retain(|tip| !(tip.agent_name == agent_name && tip.session_id == session_id));
     }
 
@@ -120,6 +169,8 @@ impl BehaviorQueue {
         }
 
         self.queue.retain(|tip| !same_turn(tip, event));
+        self.pending_completions
+            .retain(|tip| !same_turn(tip, event));
     }
 
     fn remove_permission(&mut self, event: &AgentBehaviorEvent) {
@@ -161,6 +212,11 @@ impl BehaviorDispatcher {
 
     /// 处理行为事件并同步提示窗口
     pub fn handle_event(&self, event: AgentBehaviorEvent) {
+        let pending_completion_key = if event.kind == AgentBehaviorKind::RunCompleted {
+            Some(event.key.clone())
+        } else {
+            None
+        };
         let current = {
             let Ok(mut queue) = self.queue.lock() else {
                 return;
@@ -169,6 +225,9 @@ impl BehaviorDispatcher {
         };
 
         self.sync_window(current);
+        if let Some(key) = pending_completion_key {
+            self.start_completion_confirm_timer(key);
+        }
     }
 
     /// 关闭当前提示
@@ -178,6 +237,18 @@ impl BehaviorDispatcher {
                 return;
             };
             queue.close_current()
+        };
+
+        self.sync_window(current);
+    }
+
+    /// 确认待展示的完成提醒
+    pub fn confirm_pending_completion(&self, key: &str) {
+        let current = {
+            let Ok(mut queue) = self.queue.lock() else {
+                return;
+            };
+            queue.confirm_pending_completion(key)
         };
 
         self.sync_window(current);
@@ -257,6 +328,18 @@ impl BehaviorDispatcher {
             state.behavior.close_key(&key);
         });
     }
+
+    fn start_completion_confirm_timer(&self, key: String) {
+        let app = self.app.clone();
+
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(RUN_COMPLETED_CONFIRM_MS));
+            let Some(state) = app.try_state::<crate::commands::AppState>() else {
+                return;
+            };
+            state.behavior.confirm_pending_completion(&key);
+        });
+    }
 }
 
 fn same_turn(tip: &BehaviorTip, event: &AgentBehaviorEvent) -> bool {
@@ -307,14 +390,21 @@ mod tests {
             Some("turn-1"),
             Some("call-1"),
         ));
-        queue.handle_event(event(
+        let complete = event(
             AgentBehaviorKind::RunCompleted,
             "session-2",
             Some("turn-2"),
             None,
-        ));
+        );
+        let complete_key = complete.key.clone();
+        queue.handle_event(complete);
 
         assert_eq!(queue.current().unwrap().session_id, "session-1");
+        assert_eq!(queue.queue.len(), 0);
+        assert_eq!(queue.pending_completion_count(), 1);
+
+        queue.confirm_pending_completion(&complete_key);
+
         assert_eq!(queue.queue.len(), 1);
         assert_eq!(queue.close_current().unwrap().session_id, "session-2");
     }
@@ -404,5 +494,54 @@ mod tests {
         ));
 
         assert!(queue.current().is_none());
+    }
+
+    #[test]
+    fn run_completed_waits_for_confirmation() {
+        let mut queue = BehaviorQueue::default();
+        let complete = event(
+            AgentBehaviorKind::RunCompleted,
+            "session-1",
+            Some("turn-1"),
+            None,
+        );
+        let key = complete.key.clone();
+
+        queue.handle_event(complete);
+
+        assert!(queue.current().is_none());
+        assert_eq!(queue.pending_completion_count(), 1);
+
+        queue.confirm_pending_completion(&key);
+
+        assert_eq!(
+            queue.current().unwrap().kind,
+            AgentBehaviorKind::RunCompleted
+        );
+        assert_eq!(queue.pending_completion_count(), 0);
+    }
+
+    #[test]
+    fn turn_started_cancels_pending_completion() {
+        let mut queue = BehaviorQueue::default();
+        let complete = event(
+            AgentBehaviorKind::RunCompleted,
+            "session-1",
+            Some("turn-1"),
+            None,
+        );
+        let key = complete.key.clone();
+
+        queue.handle_event(complete);
+        queue.handle_event(event(
+            AgentBehaviorKind::TurnStarted,
+            "session-1",
+            Some("turn-2"),
+            None,
+        ));
+        queue.confirm_pending_completion(&key);
+
+        assert!(queue.current().is_none());
+        assert_eq!(queue.pending_completion_count(), 0);
     }
 }

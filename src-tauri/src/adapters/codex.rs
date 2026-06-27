@@ -53,11 +53,21 @@ impl TokenExtractor for CodexAdapter {
 
 impl BehaviorExtractor for CodexAdapter {
     fn extract_behavior(&self, batch: &AgentDataBatch) -> Vec<crate::behavior::AgentBehaviorEvent> {
-        let Some(content) = batch.behavior_content() else {
-            return Vec::new();
-        };
-
-        crate::behavior::codex::parse_events(content, batch.source_key())
+        match batch {
+            AgentDataBatch::JsonlIncrement {
+                content,
+                token_context,
+                ..
+            } => crate::behavior::codex::parse_events_with_context(
+                content,
+                batch.source_key(),
+                token_context.as_deref(),
+            ),
+            _ => batch
+                .behavior_content()
+                .map(|content| crate::behavior::codex::parse_events(content, batch.source_key()))
+                .unwrap_or_default(),
+        }
     }
 }
 
