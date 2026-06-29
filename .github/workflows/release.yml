@@ -72,6 +72,10 @@ jobs:
         with:
           targets: ${{ matrix.rust-targets }}
 
+      - name: Install Rust target for project toolchain
+        if: matrix.rust-targets != ''
+        run: rustup target add ${{ matrix.rust-targets }}
+
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
