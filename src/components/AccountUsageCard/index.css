@@ -124,6 +124,7 @@
 }
 
 .usage-plan-badge,
+.usage-reset-credit-badge,
 .usage-stale-text {
     flex: 0 0 auto;
     border-radius: 6px;
@@ -136,6 +137,15 @@
 .usage-plan-badge {
     background: rgba(79, 156, 249, 0.14);
     color: #2563eb;
+}
+
+.usage-reset-credit-badge {
+    max-width: 128px;
+    overflow: hidden;
+    background: rgba(20, 184, 166, 0.13);
+    color: #0f766e;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .usage-stale-text {
@@ -254,6 +264,12 @@
     font-weight: 700;
 }
 
+.usage-summary-reset {
+    flex: 0 0 auto;
+    color: rgba(34, 34, 34, 0.42);
+    font-variant-numeric: tabular-nums;
+}
+
 @media (prefers-color-scheme: dark) {
     .account-usage-card {
         background: rgba(255, 255, 255, 0.035);
@@ -296,9 +312,18 @@
         color: rgba(255, 255, 255, 0.38);
     }
 
+    .usage-summary-reset {
+        color: rgba(255, 255, 255, 0.38);
+    }
+
     .usage-plan-badge {
         background: rgba(96, 165, 250, 0.18);
         color: #93c5fd;
+    }
+
+    .usage-reset-credit-badge {
+        background: rgba(45, 212, 191, 0.14);
+        color: #5eead4;
     }
 
     .usage-summary-pill {

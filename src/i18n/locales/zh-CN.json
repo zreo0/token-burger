@@ -81,7 +81,12 @@
         "refreshEvery": "每 {{seconds}} 秒刷新",
         "requiresCredential": "需要凭据",
         "saveCredential": "保存凭据",
-        "clearCredential": "清除"
+        "clearCredential": "清除",
+        "resetCredits": "重置次数",
+        "resetCreditsBadge": "重置 {{count}}",
+        "resetCreditsBadgeWithExpiry": "重置 {{count}} · {{time}}",
+        "resetCreditsTooltip": "剩余 {{count}} 次可用重置",
+        "resetCreditsTooltipWithExpiry": "剩余 {{count}} 次可用重置，最近一次 {{time}} 后到期"
     },
     "behaviorTip": {
         "close": "关闭提醒",

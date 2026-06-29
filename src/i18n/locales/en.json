@@ -81,7 +81,12 @@
         "refreshEvery": "Refresh every {{seconds}}s",
         "requiresCredential": "Requires credential",
         "saveCredential": "Save Credential",
-        "clearCredential": "Clear"
+        "clearCredential": "Clear",
+        "resetCredits": "Reset credits",
+        "resetCreditsBadge": "reset {{count}}",
+        "resetCreditsBadgeWithExpiry": "reset {{count}} · {{time}}",
+        "resetCreditsTooltip": "{{count}} reset credits available",
+        "resetCreditsTooltipWithExpiry": "{{count}} reset credits available, next expires in {{time}}"
     },
     "behaviorTip": {
         "close": "Close alert",

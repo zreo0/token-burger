@@ -5,7 +5,13 @@ import type { AccountUsageProviderInfo, AccountUsageSnapshot } from '../../types
 
 vi.mock('react-i18next', () => ({
     useTranslation: () => ({
-        t: (key: string, fallback?: string) => fallback ?? key,
+        t: (key: string, fallback?: string, options?: Record<string, string | number>) => {
+            let value = fallback ?? key;
+            Object.entries(options ?? {}).forEach(([name, replacement]) => {
+                value = value.replaceAll(`{{${name}}}`, String(replacement));
+            });
+            return value;
+        },
     }),
 }));
 
@@ -152,6 +158,13 @@ describe('AccountUsageCard', () => {
             percentage: 45.5,
         })).toBe('45.5%');
         expect(formatAccountUsageMetricValue({
+            metric_key: 'reset-credits',
+            label: 'Reset credits',
+            unit: 'reset_credit',
+            scope: 'workspace',
+            remaining: 3,
+        })).toBe('3');
+        expect(formatAccountUsageMetricValue({
             metric_key: 'null-percent',
             label: 'Null percent',
             unit: 'percent',
@@ -165,6 +178,28 @@ describe('AccountUsageCard', () => {
         expect(getAccountUsagePlanBadge('codex', 'prolite')).toBe('5x');
         expect(getAccountUsagePlanBadge('codex', 'unknown-plan')).toBe('unknown-plan');
         expect(getAccountUsagePlanBadge('codex')).toBeNull();
+    });
+
+    it('展示 Codex 可用重置次数和最近到期时间', () => {
+        mockUsage.value.snapshots = [makeSnapshot({
+            metrics: [
+                ...makeSnapshot().metrics,
+                {
+                    metric_key: 'codex.reset_credits.available',
+                    label: 'Reset credits',
+                    unit: 'reset_credit',
+                    scope: 'workspace',
+                    remaining: 3,
+                    reset_at: '2099-01-01T00:00:00Z',
+                },
+            ],
+        })];
+
+        const markup = renderToStaticMarkup(<AccountUsageCard />);
+
+        expect(markup).toContain('usage-reset-credit-badge');
+        expect(markup).toContain('reset 3 ·');
+        expect(markup).not.toContain('usage-summary-reset');
     });
 
     it('格式化重置倒计时不展示秒', () => {

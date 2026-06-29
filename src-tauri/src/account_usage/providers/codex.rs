@@ -17,6 +17,8 @@ use crate::account_usage::{
 const CODEX_REFRESH_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
 const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const CODEX_USAGE_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/usage";
+const CODEX_RESET_CREDITS_ENDPOINT: &str =
+    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
 pub struct CodexUsageProvider;
 
@@ -192,6 +194,30 @@ struct CreditsSnapshot {
     balance: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct ResetCreditsSummary {
+    available_count: u64,
+    next_expires_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResetCreditsResponse {
+    #[serde(default)]
+    available_count: Option<u64>,
+    #[serde(default)]
+    credits: Vec<ResetCredit>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResetCredit {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    expires_at: Option<String>,
+    #[serde(rename = "expiresAt", default)]
+    expires_at_camel: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct RateLimitEvent {
     #[serde(rename = "type")]
@@ -293,7 +319,8 @@ fn refresh_auth_file_usage(
         Err(error) => return Err(error),
     };
     let snapshots = parse_rate_limit_response(&response.headers, &response.body)?;
-    Ok(build_account_snapshot(identity, snapshots))
+    let reset_credits = request_reset_credits(client, &identity).ok();
+    Ok(build_account_snapshot(identity, snapshots, reset_credits))
 }
 
 struct UsageResponse {
@@ -330,6 +357,49 @@ fn request_usage(
 
 fn usage_endpoint() -> String {
     std::env::var("CODEX_USAGE_ENDPOINT").unwrap_or_else(|_| CODEX_USAGE_ENDPOINT.to_string())
+}
+
+fn request_reset_credits(
+    client: &Client,
+    identity: &CodexAuthIdentity,
+) -> Result<ResetCreditsSummary, AccountUsageError> {
+    let endpoint = reset_credits_endpoint();
+    let response = client
+        .get(&endpoint)
+        .bearer_auth(&identity.access_token)
+        .header("originator", "Codex Desktop")
+        .header("OAI-Product-Sku", "CODEX")
+        .header("Accept", "application/json")
+        .header("ChatGPT-Account-Id", &identity.account_id)
+        .send()
+        .map_err(|error| {
+            AccountUsageError::new(
+                AccountUsageStatus::Network,
+                redact_secret_text(&error.to_string()),
+            )
+        })?;
+    let status = response.status();
+    let body = response.text().unwrap_or_default();
+
+    if status.as_u16() == 401 || status.as_u16() == 403 {
+        return Err(AccountUsageError::new(
+            AccountUsageStatus::AuthRequired,
+            redact_secret_text(&body),
+        ));
+    }
+    if !status.is_success() {
+        return Err(AccountUsageError::new(
+            AccountUsageStatus::Error,
+            redact_secret_text(&format!("Codex 重置额度请求失败: {status}: {body}")),
+        ));
+    }
+
+    parse_reset_credits_response(&body)
+}
+
+fn reset_credits_endpoint() -> String {
+    std::env::var("CODEX_RESET_CREDITS_ENDPOINT")
+        .unwrap_or_else(|_| CODEX_RESET_CREDITS_ENDPOINT.to_string())
 }
 
 fn error_for_usage_status(
@@ -734,6 +804,7 @@ fn parse_credits_snapshot(headers: &HeaderMap) -> Option<CreditsSnapshot> {
 fn build_account_snapshot(
     identity: CodexAuthIdentity,
     rate_limits: Vec<RateLimitSnapshot>,
+    reset_credits: Option<ResetCreditsSummary>,
 ) -> AccountUsageSnapshot {
     let plan = rate_limits
         .iter()
@@ -746,6 +817,9 @@ fn build_account_snapshot(
         .filter_map(|window| window.resets_at)
         .min()
         .and_then(timestamp_to_rfc3339);
+    let mut metrics = rate_limits_to_metrics(&rate_limits);
+    append_reset_credit_metric(&mut metrics, reset_credits);
+
     AccountUsageSnapshot {
         provider_id: "codex".to_string(),
         account_key: codex_account_key(&identity),
@@ -760,7 +834,7 @@ fn build_account_snapshot(
         reset_at,
         stale: false,
         error: None,
-        metrics: rate_limits_to_metrics(&rate_limits),
+        metrics,
     }
 }
 
@@ -831,6 +905,80 @@ fn rate_limits_to_metrics(rate_limits: &[RateLimitSnapshot]) -> Vec<AccountUsage
         }
     }
     metrics
+}
+
+fn append_reset_credit_metric(
+    metrics: &mut Vec<AccountUsageMetric>,
+    reset_credits: Option<ResetCreditsSummary>,
+) {
+    let Some(reset_credits) = reset_credits else {
+        return;
+    };
+    if reset_credits.available_count == 0 {
+        return;
+    }
+
+    metrics.push(AccountUsageMetric {
+        metric_key: "codex.reset_credits.available".to_string(),
+        label: "Reset credits".to_string(),
+        unit: "reset_credit".to_string(),
+        scope: AccountUsageMetricScope::Workspace,
+        used: None,
+        limit: None,
+        remaining: Some(reset_credits.available_count as f64),
+        percentage: None,
+        reset_at: reset_credits.next_expires_at,
+    });
+}
+
+fn parse_reset_credits_response(body: &str) -> Result<ResetCreditsSummary, AccountUsageError> {
+    let response: ResetCreditsResponse = serde_json::from_str(body).map_err(|error| {
+        AccountUsageError::new(AccountUsageStatus::SchemaChanged, error.to_string())
+    })?;
+    Ok(reset_credits_summary(response))
+}
+
+fn reset_credits_summary(response: ResetCreditsResponse) -> ResetCreditsSummary {
+    let available = response
+        .credits
+        .into_iter()
+        .filter(|credit| {
+            credit
+                .status
+                .as_deref()
+                .map(|status| status.eq_ignore_ascii_case("available"))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    let available_count = response.available_count.unwrap_or(available.len() as u64);
+    let next_expires_at = available
+        .iter()
+        .filter_map(reset_credit_expiry)
+        .min_by_key(|(_, timestamp)| *timestamp)
+        .map(|(value, _)| value)
+        .or_else(|| available.iter().find_map(reset_credit_expiry_value));
+
+    ResetCreditsSummary {
+        available_count,
+        next_expires_at,
+    }
+}
+
+fn reset_credit_expiry(credit: &ResetCredit) -> Option<(String, i64)> {
+    let value = reset_credit_expiry_value(credit)?;
+    let timestamp = chrono::DateTime::parse_from_rfc3339(&value)
+        .ok()?
+        .timestamp();
+    Some((value, timestamp))
+}
+
+fn reset_credit_expiry_value(credit: &ResetCredit) -> Option<String> {
+    credit
+        .expires_at
+        .as_ref()
+        .or(credit.expires_at_camel.as_ref())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn window_label(snapshot: &RateLimitSnapshot, window: &RateLimitWindow, key: &str) -> String {
@@ -1241,6 +1389,44 @@ mod tests {
         assert!(metrics.iter().any(|metric| metric.label == "5h window"));
         assert!(metrics.iter().any(|metric| metric.label == "7d window"));
         assert!(metrics.iter().any(|metric| metric.label == "Code Review"));
+    }
+
+    #[test]
+    fn test_parse_reset_credits_response_uses_available_count_and_earliest_expiry() {
+        let body = serde_json::json!({
+            "available_count": 3,
+            "credits": [
+                { "status": "available", "expires_at": "2026-07-18T00:00:00Z" },
+                { "status": "redeemed", "expires_at": "2026-07-01T00:00:00Z" },
+                { "status": "available", "expires_at": "2026-07-12T00:00:00Z" }
+            ]
+        })
+        .to_string();
+
+        let summary = parse_reset_credits_response(&body).unwrap();
+
+        assert_eq!(summary.available_count, 3);
+        assert_eq!(
+            summary.next_expires_at.as_deref(),
+            Some("2026-07-12T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn test_append_reset_credit_metric() {
+        let mut metrics = Vec::new();
+        append_reset_credit_metric(
+            &mut metrics,
+            Some(ResetCreditsSummary {
+                available_count: 2,
+                next_expires_at: Some("2026-07-12T00:00:00Z".to_string()),
+            }),
+        );
+
+        assert_eq!(metrics.len(), 1);
+        assert_eq!(metrics[0].metric_key, "codex.reset_credits.available");
+        assert_eq!(metrics[0].remaining, Some(2.0));
+        assert_eq!(metrics[0].reset_at.as_deref(), Some("2026-07-12T00:00:00Z"));
     }
 
     #[test]

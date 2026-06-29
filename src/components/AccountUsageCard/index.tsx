@@ -7,6 +7,7 @@ import type { AccountUsageMetric, AccountUsageProviderInfo, AccountUsageSnapshot
 import './index.css';
 
 const MAX_SUMMARY_METRICS = 4;
+const RESET_CREDIT_METRIC_KEY = 'codex.reset_credits.available';
 
 const PLAN_BADGE_LABELS: Record<string, Record<string, string>> = {
     codex: {
@@ -15,6 +16,11 @@ const PLAN_BADGE_LABELS: Record<string, Record<string, string>> = {
 };
 
 type Translate = TFunction;
+
+interface ResetCreditBadge {
+    text: string;
+    title: string;
+}
 
 export function getAccountUsagePlanBadge(providerId: string, plan?: string | null): string | null {
     const normalizedPlan = plan?.trim();
@@ -26,6 +32,10 @@ export function getAccountUsagePlanBadge(providerId: string, plan?: string | nul
 export function formatAccountUsageMetricValue(metric: AccountUsageMetric): string {
     if (metric.percentage != null) {
         return `${metric.percentage.toFixed(1)}%`;
+    }
+    if (metric.unit === 'reset_credit') {
+        const count = metric.remaining ?? metric.used ?? 0;
+        return String(Math.round(count));
     }
     if (metric.used != null) {
         if (metric.unit === 'token' || metric.unit === 'tokens') {
@@ -71,20 +81,52 @@ function isQuotaMetric(metric: AccountUsageMetric): boolean {
     return getMetricPercent(metric) !== null && (metric.unit === 'percent' || metric.limit !== undefined);
 }
 
+function isResetCreditMetric(metric: AccountUsageMetric): boolean {
+    return metric.metric_key === RESET_CREDIT_METRIC_KEY || metric.unit === 'reset_credit';
+}
+
+function getAccountUsageMetricLabel(metric: AccountUsageMetric, t: Translate): string {
+    if (isResetCreditMetric(metric)) {
+        return t('usage.resetCredits', 'Reset credits');
+    }
+    return metric.label;
+}
+
+function getResetCreditBadge(metric: AccountUsageMetric, now: Date, t: Translate): ResetCreditBadge {
+    const count = Math.round(metric.remaining ?? metric.used ?? 0);
+    const resetTime = formatAccountUsageResetTime(metric.reset_at, now);
+
+    if (!resetTime) {
+        return {
+            text: t('usage.resetCreditsBadge', 'reset {{count}}', { count }),
+            title: t('usage.resetCreditsTooltip', '{{count}} reset credits available', { count }),
+        };
+    }
+
+    return {
+        text: t('usage.resetCreditsBadgeWithExpiry', 'reset {{count}} · {{time}}', { count, time: resetTime }),
+        title: t(
+            'usage.resetCreditsTooltipWithExpiry',
+            '{{count}} reset credits available, next expires in {{time}}',
+            { count, time: resetTime },
+        ),
+    };
+}
+
 function progressTone(percent: number): string {
     if (percent >= 95) return 'danger';
     if (percent >= 80) return 'warning';
     return 'ok';
 }
 
-function QuotaMetric({ metric, now }: { metric: AccountUsageMetric; now: Date }) {
+function QuotaMetric({ metric, now, t }: { metric: AccountUsageMetric; now: Date; t: Translate }) {
     const percent = getMetricPercent(metric) ?? 0;
     const resetTime = formatAccountUsageResetTime(metric.reset_at, now);
 
     return (
         <div className="usage-quota-metric">
             <div className="usage-metric-line">
-                <span>{metric.label}</span>
+                <span>{getAccountUsageMetricLabel(metric, t)}</span>
                 <span className="usage-metric-stats">
                     {resetTime && <span className="usage-reset-time">{resetTime}</span>}
                     <span className="usage-metric-value">{formatAccountUsageMetricValue(metric)}</span>
@@ -100,11 +142,14 @@ function QuotaMetric({ metric, now }: { metric: AccountUsageMetric; now: Date })
     );
 }
 
-function SummaryMetric({ metric }: { metric: AccountUsageMetric }) {
+function SummaryMetric({ metric, now, t }: { metric: AccountUsageMetric; now: Date; t: Translate }) {
+    const resetTime = formatAccountUsageResetTime(metric.reset_at, now);
+
     return (
         <span className="usage-summary-pill">
-            <span className="usage-summary-label">{metric.label}</span>
+            <span className="usage-summary-label">{getAccountUsageMetricLabel(metric, t)}</span>
             <span className="usage-summary-value">{formatAccountUsageMetricValue(metric)}</span>
+            {resetTime && <span className="usage-summary-reset">{resetTime}</span>}
         </span>
     );
 }
@@ -179,8 +224,10 @@ function ProviderUsageCard({
 }) {
     const metrics = snapshot.metrics ?? [];
     const quotaMetrics = metrics.filter(isQuotaMetric);
-    const summaryMetrics = metrics.filter(metric => !isQuotaMetric(metric)).slice(0, MAX_SUMMARY_METRICS);
+    const summaryMetrics = metrics.filter(metric => !isQuotaMetric(metric) && !isResetCreditMetric(metric)).slice(0, MAX_SUMMARY_METRICS);
     const hasError = snapshot.status === 'error' || snapshot.status === 'auth_required' || snapshot.status === 'forbidden';
+    const resetCreditMetric = metrics.find(isResetCreditMetric);
+    const resetCreditBadge = !hasError && resetCreditMetric ? getResetCreditBadge(resetCreditMetric, now, t) : null;
     const planBadge = getAccountUsagePlanBadge(snapshot.provider_id, snapshot.plan);
 
     return (
@@ -189,6 +236,11 @@ function ProviderUsageCard({
                 <div className="usage-provider-title-row">
                     <span className="usage-provider-name">{provider?.display_name || snapshot.provider_id}</span>
                     {planBadge && <span className="usage-plan-badge">{planBadge}</span>}
+                    {resetCreditBadge && (
+                        <span className="usage-reset-credit-badge" title={resetCreditBadge.title}>
+                            {resetCreditBadge.text}
+                        </span>
+                    )}
                     {snapshot.stale && <span className="usage-stale-text">{t('usage.stale', 'Stale')}</span>}
                 </div>
                 <RefreshIconButton refreshing={refreshing} onClick={() => refreshProvider(snapshot.provider_id)} t={t} />
@@ -201,14 +253,14 @@ function ProviderUsageCard({
                     {quotaMetrics.length > 0 && (
                         <div className="usage-quota-list">
                             {quotaMetrics.map(metric => (
-                                <QuotaMetric key={`${metric.metric_key}-${metric.scope}`} metric={metric} now={now} />
+                                <QuotaMetric key={`${metric.metric_key}-${metric.scope}`} metric={metric} now={now} t={t} />
                             ))}
                         </div>
                     )}
                     {summaryMetrics.length > 0 && (
                         <div className="usage-summary-list">
                             {summaryMetrics.map(metric => (
-                                <SummaryMetric key={`${metric.metric_key}-${metric.scope}`} metric={metric} />
+                                <SummaryMetric key={`${metric.metric_key}-${metric.scope}`} metric={metric} now={now} t={t} />
                             ))}
                         </div>
                     )}
