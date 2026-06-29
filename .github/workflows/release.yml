@@ -113,4 +113,4 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
-          releaseAssetNamePattern: '[name]_v[version]_[platform]_[arch][ext]'
+          assetNamePattern: '[name]_v[version]_[platform]_[arch][ext]'
