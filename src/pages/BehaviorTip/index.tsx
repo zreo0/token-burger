@@ -23,6 +23,18 @@ const SUMMARY_KEYS: Record<string, string> = {
 };
 
 const CODEX_ABORT_PREFIX = 'Codex stopped the current turn: ';
+const MOCK_TIP: BehaviorTipPayload = {
+    key: 'mock-tip',
+    agent_name: 'codex',
+    session_id: 'mock-session',
+    turn_id: 'mock-turn',
+    call_id: null,
+    kind: 'permission_requested',
+    timestamp: '2026-06-01T10:00:00Z',
+    title: 'Permission needed',
+    summary: 'Codex is waiting for permission',
+    auto_hide_ms: null,
+};
 const AGENT_ICONS: Record<string, string> = {
     codex: openaiProviderIcon,
     'claude-code': claudeCodeProviderIcon,
@@ -89,6 +101,11 @@ function BehaviorTip() {
     }, []);
 
     useEffect(() => {
+        if (import.meta.env.DEV && window.location.hash.includes('mockTip=1')) {
+            setTip(MOCK_TIP);
+            return;
+        }
+
         invoke<BehaviorTipPayload | null>('get_current_behavior_tip')
             .then((current) => setTip(current))
             .catch(() => {});
