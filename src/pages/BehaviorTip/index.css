@@ -13,165 +13,167 @@
 }
 
 .behavior-tip-card {
+    --tip-accent: #d6b778;
     position: relative;
-    display: grid;
-    grid-template-columns: 40px minmax(0, 1fr) 28px;
+    display: flex;
     align-items: center;
-    gap: 11px;
     width: 100%;
     height: 100%;
-    padding: 12px 11px 12px 12px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    padding: 16px 80px 16px 27px;
+    border: 0;
     border-radius: 18px;
-    background: rgba(22, 22, 21, 0.97);
-    backdrop-filter: blur(24px) saturate(1.25);
-    -webkit-backdrop-filter: blur(24px) saturate(1.25);
-    /* box-shadow: 0 14px 32px rgba(0, 0, 0, 0.28); */
-    color: #f8f8f6;
+    background: rgba(18, 18, 17, 0.88);
+    backdrop-filter: blur(28px) saturate(1.18);
+    -webkit-backdrop-filter: blur(28px) saturate(1.18);
+    box-shadow:
+        0 18px 38px rgba(0, 0, 0, 0.32),
+        inset 0 1px 0 rgba(255, 255, 255, 0.075),
+        inset 0 -18px 34px rgba(0, 0, 0, 0.18);
+    color: #f7f5ef;
     box-sizing: border-box;
     overflow: hidden;
+    isolation: isolate;
 }
 
-.behavior-tip-icon-wrap {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    height: 40px;
-    border-radius: 14px;
-    background: rgba(255, 255, 255, 0.065);
-    border: 1px solid rgba(255, 255, 255, 0.13);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+.behavior-tip-card.permission {
+    --tip-accent: #d6b778;
 }
 
-.behavior-tip-icon {
-    width: 23px;
-    height: 23px;
-    object-fit: contain;
-    opacity: 1;
-    filter: brightness(0) saturate(100%) invert(93%) sepia(3%) saturate(84%) hue-rotate(202deg) brightness(98%) contrast(90%);
+.behavior-tip-card.success {
+    --tip-accent: #8dcc9b;
 }
 
-.behavior-tip-icon-fallback {
-    font-size: 11px;
-    line-height: 1;
-    font-weight: 700;
-    color: #ededeb;
+.behavior-tip-card.warning {
+    --tip-accent: #d9957f;
 }
 
-.behavior-tip-status {
-    position: absolute;
-    right: 5px;
-    bottom: 5px;
-    width: 7px;
-    height: 7px;
-    border-radius: 999px;
-    background: #d2b983;
-    box-shadow: 0 0 0 3px rgba(210, 185, 131, 0.12);
-    animation: behavior-tip-breathe 2.8s cubic-bezier(0.32, 0.72, 0, 1) infinite;
-}
-
-.behavior-tip-card.success .behavior-tip-status {
-    background: #85c796;
-    box-shadow: 0 0 0 3px rgba(133, 199, 150, 0.12);
-}
-
-.behavior-tip-card.warning .behavior-tip-status {
-    background: #c88474;
-    box-shadow: 0 0 0 3px rgba(200, 132, 116, 0.12);
-}
-
-.behavior-tip-card.neutral .behavior-tip-status {
-    background: #a7a39a;
-    box-shadow: 0 0 0 3px rgba(167, 163, 154, 0.12);
+.behavior-tip-card.neutral {
+    --tip-accent: #aaa59b;
 }
 
 .behavior-tip-copy {
+    position: relative;
+    z-index: 2;
     min-width: 0;
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 6px;
+    gap: 7px;
+    width: 100%;
 }
 
 .behavior-tip-heading {
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 5px;
-    font-size: 12px;
+    gap: 9px;
+    max-width: 100%;
+    font-size: 11px;
     line-height: 1.1;
     font-weight: 650;
     letter-spacing: 0;
-    color: #f8f8f6;
+    color: rgba(247, 245, 239, 0.74);
     white-space: nowrap;
     overflow: hidden;
 }
 
 .behavior-tip-agent {
     flex: 0 0 auto;
-    color: #d9d9d6;
-}
-
-.behavior-tip-dot {
-    flex: 0 0 auto;
-    color: #9b9b98;
+    color: rgba(247, 245, 239, 0.6);
+    font-weight: 650;
 }
 
 .behavior-tip-title {
     min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--tip-accent);
+    font-weight: 720;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
 .behavior-tip-summary {
-    font-size: 13px;
-    line-height: 1.18;
-    font-weight: 560;
-    color: #f4f4f1;
+    max-width: 100%;
+    font-size: 15px;
+    line-height: 1.12;
+    font-weight: 680;
+    letter-spacing: 0;
+    color: #f7f5ef;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    text-shadow: 0 1px 16px rgba(0, 0, 0, 0.32);
 }
 
-.behavior-tip-close {
+.behavior-tip-mark {
+    position: absolute;
+    right: -12px;
+    bottom: -26px;
+    z-index: 1;
+    width: 126px;
+    height: 126px;
+    object-fit: contain;
+    opacity: 0.03;
+    filter: brightness(0) invert(1);
+    transform-origin: center;
+    pointer-events: none;
+}
+
+.behavior-tip-mark-fallback {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
+    color: rgba(247, 245, 239, 0.16);
+    font-size: 42px;
+    line-height: 1;
+    font-weight: 780;
+}
+
+.behavior-tip-close {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 3;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
     border: 0;
     border-radius: 50%;
-    background: transparent;
-    color: #b9b9b5;
-    font-size: 17px;
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(247, 245, 239, 0.72);
+    font-size: 16px;
     line-height: 1;
     cursor: default;
-    align-self: start;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-2px) scale(0.94);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
     transition:
+        opacity 180ms cubic-bezier(0.32, 0.72, 0, 1),
         background 240ms cubic-bezier(0.32, 0.72, 0, 1),
         color 240ms cubic-bezier(0.32, 0.72, 0, 1),
         transform 240ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
+.behavior-tip-card:hover .behavior-tip-close,
+.behavior-tip-card:focus-within .behavior-tip-close {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0) scale(1);
+}
+
 .behavior-tip-close:hover {
-    background: rgba(255, 255, 255, 0.09);
-    color: #f8f8f6;
-    transform: scale(1.03);
+    background: rgba(255, 255, 255, 0.14);
+    color: #f7f5ef;
+    transform: translateY(0) scale(1.04);
 }
 
 .behavior-tip-close:focus-visible {
     outline: none;
-    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.2);
-}
-
-@keyframes behavior-tip-breathe {
-    0%,
-    100% {
-        opacity: 0.62;
-    }
-    50% {
-        opacity: 1;
-    }
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.18);
 }

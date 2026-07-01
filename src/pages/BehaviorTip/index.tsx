@@ -146,28 +146,25 @@ function BehaviorTip() {
                         exit={{ opacity: 0, y: -4, scale: 0.985 }}
                         transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
                     >
-                        <div className="behavior-tip-icon-wrap" aria-hidden="true">
-                            {icon ? (
-                                <img
-                                    className="behavior-tip-icon"
-                                    src={icon}
-                                    alt=""
-                                />
-                            ) : (
-                                <span className="behavior-tip-icon-fallback">
-                                    {agentLabel(tip.agent_name).slice(0, 2).toUpperCase()}
-                                </span>
-                            )}
-                            <span className="behavior-tip-status" />
-                        </div>
                         <div className="behavior-tip-copy">
                             <div className="behavior-tip-heading">
                                 <span className="behavior-tip-agent">{agentLabel(tip.agent_name)}</span>
-                                <span className="behavior-tip-dot" aria-hidden="true">·</span>
                                 <span className="behavior-tip-title">{localizedTipTitle(t, tip)}</span>
                             </div>
                             <div className="behavior-tip-summary">{localizedTipSummary(t, tip)}</div>
                         </div>
+                        {icon ? (
+                            <img
+                                className="behavior-tip-mark"
+                                src={icon}
+                                alt=""
+                                aria-hidden="true"
+                            />
+                        ) : (
+                            <span className="behavior-tip-mark behavior-tip-mark-fallback" aria-hidden="true">
+                                {agentLabel(tip.agent_name).slice(0, 2).toUpperCase()}
+                            </span>
+                        )}
                         <button
                             type="button"
                             className="behavior-tip-close"
