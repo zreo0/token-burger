@@ -5,7 +5,13 @@ import { getVersion } from '@tauri-apps/api/app';
 import { check, Update } from '@tauri-apps/plugin-updater';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { AnimatePresence, motion } from 'framer-motion';
-import type { AccountUsageProviderInfo, AgentInfo, AppSettings, PlatformInfo } from '../../types';
+import type {
+    AccountUsageProviderInfo,
+    AgentInfo,
+    AppSettings,
+    PlatformInfo,
+    PricingRefreshResult,
+} from '../../types';
 import { getPlatformInfo } from '../../utils/platform';
 import { BURGER_THEMES } from '../../components/Burger/themes';
 import { useAccountUsageContext } from '../../context/AccountUsageContext';
@@ -33,6 +39,20 @@ type UpdateStatus =
     | { state: 'ready-to-restart'; update: Update }
     | { state: 'error'; message: string };
 
+type PricingReloadStatus =
+    | { state: 'idle' }
+    | { state: 'loading' }
+    | { state: 'success'; modelCount: number }
+    | { state: 'error' };
+
+/**
+ * 请求后端强制重新加载模型价格
+ * 无参数，返回后端刷新结果 Promise
+ */
+export function requestPricingReload(): Promise<PricingRefreshResult> {
+    return invoke<PricingRefreshResult>('reload_pricing');
+}
+
 function canShowProviderInMenuBar(provider: AccountUsageProviderInfo): boolean {
     return provider.capabilities.includes('account_quota');
 }
@@ -59,6 +79,7 @@ function Settings() {
     const [confirmAction, setConfirmAction] = useState<string | null>(null);
     const [appVersion, setAppVersion] = useState('');
     const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ state: 'idle' });
+    const [pricingReloadStatus, setPricingReloadStatus] = useState<PricingReloadStatus>({ state: 'idle' });
     const visibleUsageProviders = usageProviders.filter(provider => VISIBLE_USAGE_PROVIDER_IDS.has(provider.id));
     const isMac = platformInfo?.platform === 'macos';
 
@@ -116,6 +137,20 @@ function Settings() {
             setConfirmAction(null);
         } catch {
             // 忽略
+        }
+    };
+
+    /**
+     * 强制刷新模型价格并更新设置页反馈
+     * 无参数和返回值
+     */
+    const handleReloadPricing = async (): Promise<void> => {
+        setPricingReloadStatus({ state: 'loading' });
+        try {
+            const result = await requestPricingReload();
+            setPricingReloadStatus({ state: 'success', modelCount: result.model_count });
+        } catch {
+            setPricingReloadStatus({ state: 'error' });
         }
     };
 
@@ -313,6 +348,29 @@ function Settings() {
                                                 />
                                                 <span className="suffix">{t('settings.days')}</span>
                                             </div>
+                                        </div>
+                                        <div className="setting-divider" />
+                                        <div className="setting-row">
+                                            <div className="setting-copy">
+                                                <span className="setting-label">{t('settings.modelPricing')}</span>
+                                                <span className="setting-hint">
+                                                    {pricingReloadStatus.state === 'success'
+                                                        ? t('settings.pricingRefreshSuccess', { count: pricingReloadStatus.modelCount })
+                                                        : pricingReloadStatus.state === 'error'
+                                                            ? t('settings.pricingRefreshFailed')
+                                                            : t('settings.modelPricingHint')}
+                                                </span>
+                                            </div>
+                                            <button
+                                                className="mac-btn"
+                                                type="button"
+                                                disabled={pricingReloadStatus.state === 'loading'}
+                                                onClick={handleReloadPricing}
+                                            >
+                                                {pricingReloadStatus.state === 'loading'
+                                                    ? t('settings.refreshingPricing')
+                                                    : t('settings.refreshPricing')}
+                                            </button>
                                         </div>
                                     </div>
 

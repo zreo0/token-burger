@@ -570,6 +570,10 @@
     background: rgba(0, 0, 0, 0.02);
 }
 
+.settings-container .mac-btn:disabled {
+    opacity: 0.55;
+}
+
 .settings-container .mac-btn.danger-text {
     color: #ff3b30;
 }

@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { listen } from '@tauri-apps/api/event';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useToken } from '../../context/TokenContext';
 import { useAccountUsageContext } from '../../context/AccountUsageContext';
@@ -49,6 +49,16 @@ export function getPopupWindowHeight(hasAccountUsage: boolean, contentHeight: nu
     );
 }
 
+/**
+ * 监听模型价格更新事件
+ * 参数为价格更新回调，返回事件取消监听函数 Promise
+ */
+export function listenForPricingUpdates(onUpdate: () => void): Promise<UnlistenFn> {
+    return listen('pricing-updated', () => {
+        onUpdate();
+    });
+}
+
 export function Popup() {
     const { t } = useTranslation();
     const { summary, loading, error, refresh, range, setRange } = useToken();
@@ -59,6 +69,21 @@ export function Popup() {
     const [isWindows, setIsWindows] = useState(false);
     const containerRef = useRef<HTMLDivElement | null>(null);
     const lastPopupHeight = useRef<number | null>(null);
+
+    /**
+     * 从后端读取当前模型价格表
+     * 无参数和返回值，读取结果写入组件状态
+     */
+    const loadPricing = useCallback(async (): Promise<void> => {
+        try {
+            const table = await invoke<PricingTable>('get_pricing');
+            setPricing(table);
+        } catch {
+            // 保留当前价格表
+        } finally {
+            setPricingReady(true);
+        }
+    }, []);
 
     useLayoutEffect(() => {
         document.documentElement.classList.add('popup-window-root');
@@ -71,10 +96,7 @@ export function Popup() {
     }, []);
 
     useEffect(() => {
-        invoke<PricingTable>('get_pricing')
-            .then(setPricing)
-            .catch(() => {})
-            .finally(() => setPricingReady(true));
+        void loadPricing();
 
         invoke<AppSettings>('get_settings')
             .then((s) => { if (s.color_theme) setColorTheme(s.color_theme); })
@@ -83,17 +105,21 @@ export function Popup() {
         getPlatformInfo()
             .then((info) => setIsWindows(info.platform === 'windows'))
             .catch(() => {});
-    }, []);
+    }, [loadPricing]);
 
     useEffect(() => {
         const unlistenTheme = listen<string>('settings-color-theme-changed', (event) => {
             setColorTheme(event.payload);
         });
+        const unlistenPricing = listenForPricingUpdates(() => {
+            void loadPricing();
+        });
 
         return () => {
             unlistenTheme.then((fn) => fn());
+            unlistenPricing.then((fn) => fn());
         };
-    }, []);
+    }, [loadPricing]);
 
     const cost = summary ? calculateTotalCost(summary.by_model, pricing) : 0;
     const isSummaryLoading = loading || !summary;
@@ -121,6 +147,7 @@ export function Popup() {
             });
             void refresh();
             void reloadAccountUsage();
+            void invoke('ensure_pricing_fresh').catch(() => {});
         });
 
         return () => {

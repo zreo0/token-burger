@@ -56,7 +56,13 @@
         "downloading": "下载中... {{progress}}%",
         "readyToRestart": "更新就绪，重启以应用更新。",
         "restart": "立即重启",
-        "usage": "账号用量"
+        "usage": "账号用量",
+        "modelPricing": "模型价格",
+        "modelPricingHint": "每天自动更新，也可立即从 LiteLLM 获取最新价格",
+        "refreshPricing": "立即刷新",
+        "refreshingPricing": "刷新中...",
+        "pricingRefreshSuccess": "已更新 {{count}} 个模型的价格",
+        "pricingRefreshFailed": "模型价格刷新失败，当前价格保持不变"
     },
     "common": {
         "error": "出了点问题",

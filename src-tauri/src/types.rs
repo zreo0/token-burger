@@ -79,6 +79,15 @@ pub struct ModelPrice {
 /// 价格表（模型名 → 价格）
 pub type PricingTable = HashMap<String, ModelPrice>;
 
+/// 模型价格刷新结果
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PricingRefreshResult {
+    /// 是否实际获取并应用了新价格表
+    pub updated: bool,
+    /// 当前价格表包含的模型数量
+    pub model_count: usize,
+}
+
 /// 冷启动进度
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ColdStartProgress {

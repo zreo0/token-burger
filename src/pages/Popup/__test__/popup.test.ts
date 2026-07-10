@@ -1,7 +1,8 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { getPopupWindowHeight, getTopModels, Popup } from '../index';
+import { listen } from '@tauri-apps/api/event';
+import { getPopupWindowHeight, getTopModels, listenForPricingUpdates, Popup } from '../index';
 
 vi.mock('react-i18next', () => ({
     useTranslation: () => ({
@@ -125,5 +126,20 @@ describe('Popup rendering', () => {
         } finally {
             consoleError.mockRestore();
         }
+    });
+});
+
+describe('pricing updates', () => {
+    it('监听 pricing-updated 并触发价格重载', async () => {
+        const onUpdate = vi.fn();
+        const mockedListen = vi.mocked(listen);
+        mockedListen.mockClear();
+
+        await listenForPricingUpdates(onUpdate);
+
+        expect(mockedListen).toHaveBeenCalledWith('pricing-updated', expect.any(Function));
+        const handler = mockedListen.mock.calls[0][1];
+        handler({} as never);
+        expect(onUpdate).toHaveBeenCalledOnce();
     });
 });

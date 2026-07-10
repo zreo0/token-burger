@@ -288,7 +288,8 @@ pub fn run() {
 
             app.manage(commands::AppState {
                 db_path: db_path_str,
-                pricing: pricing_table,
+                pricing: std::sync::RwLock::new(pricing_table),
+                pricing_refresh_lock: tokio::sync::Mutex::new(()),
                 watcher: std::sync::Mutex::new(Some(watcher_engine)),
                 write_tx: std::sync::Mutex::new(write_tx_for_state),
                 account_usage: account_usage_manager,
@@ -298,6 +299,7 @@ pub fn run() {
                 behavior_tips_enabled: behavior_tips_enabled.clone(),
             });
             commands::start_account_usage_refresher(app.handle());
+            commands::start_pricing_refresher(app.handle());
 
             // 使用编译时嵌入的图标，Windows 使用白色版本以适配深色任务栏
             #[cfg(target_os = "windows")]
@@ -392,6 +394,8 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::get_pricing,
+            commands::ensure_pricing_fresh,
+            commands::reload_pricing,
             commands::get_platform_info,
             commands::list_account_usage_providers,
             commands::get_account_usage_snapshots,

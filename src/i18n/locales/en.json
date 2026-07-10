@@ -56,7 +56,13 @@
         "downloading": "Downloading... {{progress}}%",
         "readyToRestart": "Update ready. Restart to apply.",
         "restart": "Restart Now",
-        "usage": "Usage"
+        "usage": "Usage",
+        "modelPricing": "Model pricing",
+        "modelPricingHint": "Updated daily, or fetch the latest prices from LiteLLM now",
+        "refreshPricing": "Refresh Now",
+        "refreshingPricing": "Refreshing...",
+        "pricingRefreshSuccess": "Updated pricing for {{count}} models",
+        "pricingRefreshFailed": "Failed to refresh pricing; current prices were kept"
     },
     "common": {
         "error": "Something went wrong",

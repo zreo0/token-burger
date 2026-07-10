@@ -94,6 +94,14 @@ export interface ModelPrice {
 // 价格表（模型名 → 价格）
 export type PricingTable = Record<string, ModelPrice>;
 
+// 模型价格刷新结果
+export interface PricingRefreshResult {
+    // 是否实际获取并应用了新价格表
+    updated: boolean;
+    // 当前价格表包含的模型数量
+    model_count: number;
+}
+
 // 冷启动进度
 export interface ColdStartProgress {
     agent: string;

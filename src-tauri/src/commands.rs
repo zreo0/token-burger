@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver, Sender},
-    Arc, Mutex,
+    Arc, Mutex, RwLock,
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -20,16 +20,23 @@ use crate::account_usage::{
 use crate::adapters;
 use crate::behavior::dispatcher::BehaviorDispatcher;
 use crate::db;
-use crate::types::{AgentInfo, AppSettings, PlatformInfo, PricingTable, TokenSummary};
+use crate::types::{
+    AgentInfo, AppSettings, PlatformInfo, PricingRefreshResult, PricingTable, TokenSummary,
+};
 use crate::watcher::{self, BehaviorRuntime};
 
 const ACCOUNT_USAGE_IDLE_POLL_SECS: u64 = 30;
 const ACCOUNT_USAGE_SLEEP_SLICE_MS: u64 = 500;
+// 模型价格后台检查间隔
+const PRICING_REFRESH_CHECK_SECS: u64 = 60 * 60;
 
 /// Tauri 共享状态
 pub struct AppState {
     pub db_path: String,
-    pub pricing: PricingTable,
+    /// 当前共享模型价格表
+    pub pricing: RwLock<PricingTable>,
+    /// 串行化自动与手动价格刷新
+    pub pricing_refresh_lock: tokio::sync::Mutex<()>,
     pub watcher: Mutex<Option<watcher::WatcherEngine>>,
     pub write_tx: Mutex<std::sync::mpsc::Sender<db::WriteRequest>>,
     pub account_usage: AccountUsageManager,
@@ -37,6 +44,71 @@ pub struct AppState {
     pub cold_start_complete: Arc<AtomicBool>,
     pub behavior: Arc<BehaviorDispatcher>,
     pub behavior_tips_enabled: Arc<AtomicBool>,
+}
+
+/// 启动模型价格后台新鲜度检查
+/// 参数为应用句柄，无返回值
+pub(crate) fn start_pricing_refresher(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(PRICING_REFRESH_CHECK_SECS)).await;
+            if let Err(error) = refresh_pricing_state(&app, false).await {
+                log::warn!("后台刷新模型价格失败: {}", error);
+            }
+        }
+    });
+}
+
+/// 读取当前共享模型价格表
+/// 参数为价格表读写锁，返回完整价格表快照
+fn current_pricing(pricing: &RwLock<PricingTable>) -> Result<PricingTable, String> {
+    pricing
+        .read()
+        .map(|table| table.clone())
+        .map_err(|_| "读取模型价格失败".to_string())
+}
+
+/// 原子替换完整模型价格表
+/// 参数为价格表读写锁和新表，返回新表模型数量
+fn replace_pricing(pricing: &RwLock<PricingTable>, table: PricingTable) -> Result<usize, String> {
+    let model_count = table.len();
+    *pricing
+        .write()
+        .map_err(|_| "更新模型价格失败".to_string())? = table;
+    Ok(model_count)
+}
+
+/// 刷新并替换共享模型价格表
+/// 参数为应用句柄和强制刷新标记，返回刷新状态及模型数量
+async fn refresh_pricing_state(
+    app: &AppHandle,
+    force: bool,
+) -> Result<PricingRefreshResult, String> {
+    let state = app.state::<AppState>();
+    let _refresh_guard = state.pricing_refresh_lock.lock().await;
+    let refreshed =
+        tauri::async_runtime::spawn_blocking(move || crate::pricing::refresh_pricing_table(force))
+            .await
+            .map_err(|error| error.to_string())??;
+
+    let Some(table) = refreshed else {
+        let model_count = current_pricing(&state.pricing)?.len();
+        return Ok(PricingRefreshResult {
+            updated: false,
+            model_count,
+        });
+    };
+
+    let model_count = replace_pricing(&state.pricing, table)?;
+    if let Err(error) = app.emit("pricing-updated", ()) {
+        log::warn!("广播模型价格更新失败: {}", error);
+    }
+
+    Ok(PricingRefreshResult {
+        updated: true,
+        model_count,
+    })
 }
 
 /// 账号用量后台刷新线程
@@ -532,7 +604,21 @@ pub fn get_current_behavior_tip(
 
 #[tauri::command]
 pub fn get_pricing(state: State<AppState>) -> Result<PricingTable, String> {
-    Ok(state.pricing.clone())
+    current_pricing(&state.pricing)
+}
+
+/// 确保当前日期已有有效模型价格
+/// 参数为应用句柄，返回刷新状态及模型数量
+#[tauri::command]
+pub async fn ensure_pricing_fresh(app: AppHandle) -> Result<PricingRefreshResult, String> {
+    refresh_pricing_state(&app, false).await
+}
+
+/// 强制从远程重新加载模型价格
+/// 参数为应用句柄，返回刷新状态及模型数量
+#[tauri::command]
+pub async fn reload_pricing(app: AppHandle) -> Result<PricingRefreshResult, String> {
+    refresh_pricing_state(&app, true).await
 }
 
 fn current_platform_info() -> PlatformInfo {
@@ -700,6 +786,23 @@ pub fn format_token_count(total: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ModelPrice;
+
+    /// 创建共享价格表测试数据
+    /// 参数为模型名，返回单模型价格表
+    fn pricing_table(model: &str) -> PricingTable {
+        let mut table = PricingTable::new();
+        table.insert(
+            model.to_string(),
+            ModelPrice {
+                input_cost_per_token: 0.1,
+                output_cost_per_token: 0.2,
+                cache_creation_input_token_cost: 0.0,
+                cache_read_input_token_cost: 0.0,
+            },
+        );
+        table
+    }
 
     #[test]
     fn test_format_token_count() {
@@ -722,5 +825,17 @@ mod tests {
         assert_eq!(main_tray_token_title("en", 45678, false), "Scanning...");
         assert_eq!(main_tray_token_title("zh-CN", 45678, false), "扫描中...");
         assert_eq!(main_tray_token_title("en", 45678, true), "45.7K");
+    }
+
+    #[test]
+    fn test_replace_pricing_replaces_complete_shared_table() {
+        let pricing = RwLock::new(pricing_table("old-model"));
+
+        let model_count = replace_pricing(&pricing, pricing_table("new-model")).unwrap();
+        let current = current_pricing(&pricing).unwrap();
+
+        assert_eq!(model_count, 1);
+        assert!(!current.contains_key("old-model"));
+        assert!(current.contains_key("new-model"));
     }
 }

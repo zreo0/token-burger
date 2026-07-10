@@ -22,6 +22,12 @@ fn today_cache_file() -> Option<std::path::PathBuf> {
     cache_dir().map(|d| d.join(format!("model_pricing_{}.json", today)))
 }
 
+/// 判断刷新是否需要请求远程价格表
+/// 参数为是否强制刷新及当天缓存是否有效，返回是否需要远程请求
+fn should_fetch_remote(force: bool, has_valid_today_cache: bool) -> bool {
+    force || !has_valid_today_cache
+}
+
 /// 加载定价表：当天缓存 > 远程 > 历史缓存 > bundled > fallback
 pub fn load_pricing_table(resources_dir: &Path) -> PricingTable {
     // 1. 尝试加载当天缓存
@@ -32,7 +38,9 @@ pub fn load_pricing_table(resources_dir: &Path) -> PricingTable {
 
     // 2. 尝试远程获取并缓存
     if let Some(remote) = fetch_remote_pricing() {
-        save_today_cache(&remote);
+        if let Err(error) = save_today_cache(&remote) {
+            log::warn!("保存当天定价缓存失败: {}", error);
+        }
         log::info!("已从远程更新定价表");
         return remote;
     }
@@ -59,8 +67,20 @@ pub fn load_pricing_table(resources_dir: &Path) -> PricingTable {
 /// 从当天缓存文件加载
 fn load_today_cache() -> Option<PricingTable> {
     let path = today_cache_file()?;
+    load_pricing_file(&path)
+}
+
+/// 从指定 JSON 文件加载价格表
+/// 参数为文件路径，返回解析成功的价格表或 None
+fn load_pricing_file(path: &Path) -> Option<PricingTable> {
     let content = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&content).ok()
+}
+
+/// 检查当天缓存是否存在且可以解析
+/// 无参数，返回当天缓存是否有效
+pub fn has_valid_today_cache() -> bool {
+    load_today_cache().is_some()
 }
 
 /// 加载最近的历史缓存（按文件名降序找最新的）
@@ -80,27 +100,23 @@ fn load_latest_cache() -> Option<PricingTable> {
         .collect();
     entries.sort_by_key(|entry| std::cmp::Reverse(entry.file_name()));
     for entry in entries {
-        if let Ok(content) = std::fs::read_to_string(entry.path()) {
-            if let Ok(table) = serde_json::from_str::<PricingTable>(&content) {
-                return Some(table);
-            }
+        if let Some(table) = load_pricing_file(&entry.path()) {
+            return Some(table);
         }
     }
     None
 }
 
 /// 保存到当天缓存文件
-fn save_today_cache(table: &PricingTable) {
-    if let Some(dir) = cache_dir() {
-        let _ = std::fs::create_dir_all(&dir);
-        if let Some(path) = today_cache_file() {
-            if let Ok(json) = serde_json::to_string_pretty(table) {
-                if std::fs::write(&path, json).is_ok() {
-                    cleanup_old_pricing_caches(&path);
-                }
-            }
-        }
-    }
+/// 参数为完整价格表，返回缓存写入结果
+fn save_today_cache(table: &PricingTable) -> Result<(), String> {
+    let dir = cache_dir().ok_or_else(|| "无法确定定价缓存目录".to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let path = today_cache_file().ok_or_else(|| "无法确定当天定价缓存路径".to_string())?;
+    let json = serde_json::to_string_pretty(table).map_err(|error| error.to_string())?;
+    std::fs::write(&path, json).map_err(|error| error.to_string())?;
+    cleanup_old_pricing_caches(&path);
+    Ok(())
 }
 
 /// 删除同目录下旧的定价缓存文件，仅匹配 model_pricing_*.json
@@ -147,6 +163,18 @@ pub fn fetch_remote_pricing() -> Option<PricingTable> {
     }
     let content = resp.text().ok()?;
     parse_litellm_pricing(&content)
+}
+
+/// 按刷新模式获取并缓存远程价格表
+/// 参数表示是否绕过当天缓存，返回新价格表或无需更新状态
+pub fn refresh_pricing_table(force: bool) -> Result<Option<PricingTable>, String> {
+    if !should_fetch_remote(force, has_valid_today_cache()) {
+        return Ok(None);
+    }
+
+    let table = fetch_remote_pricing().ok_or_else(|| "无法获取最新模型价格".to_string())?;
+    save_today_cache(&table)?;
+    Ok(Some(table))
 }
 
 /// 解析 LiteLLM 格式的定价 JSON（忽略无价格字段的条目）
@@ -262,5 +290,26 @@ mod tests {
         assert!(current.exists());
         assert!(!old.exists());
         assert!(unrelated.exists());
+    }
+
+    #[test]
+    fn test_should_fetch_remote() {
+        assert!(!should_fetch_remote(false, true));
+        assert!(should_fetch_remote(false, false));
+        assert!(should_fetch_remote(true, true));
+    }
+
+    #[test]
+    fn test_cache_file_must_contain_valid_pricing_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let valid = dir.path().join("valid.json");
+        let invalid = dir.path().join("invalid.json");
+        let table = fallback_pricing();
+
+        std::fs::write(&valid, serde_json::to_string(&table).unwrap()).unwrap();
+        std::fs::write(&invalid, "{invalid json").unwrap();
+
+        assert_eq!(load_pricing_file(&valid).unwrap().len(), table.len());
+        assert!(load_pricing_file(&invalid).is_none());
     }
 }
