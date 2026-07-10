@@ -46,16 +46,14 @@
 
 | 用量总览 | 设置 |
 | --- | --- |
-| <img src="./docs/images/usage-popup.jpeg" alt="TokenBurger 用量总览" width="360"> | <img src="./docs/images/setting.png" alt="TokenBurger 设置页" width="420"> |
+| <img src="./docs/images/usage-popup.png" alt="TokenBurger 用量总览" width="360"> | <img src="./docs/images/setting.png" alt="TokenBurger 设置页" width="420"> |
 
 ## 当前支持
 
-| Agent | 数据源 | Token 统计 | 运行提醒 |
-| --- | --- | --- | --- |
-| Claude Code | `~/.claude/projects/**/*.jsonl` | 输入、缓存写入、缓存读取、输出、模型 | 暂无 |
-| Codex | `~/.codex/sessions/**/*.jsonl` | 输入、缓存读取、输出、模型 | 权限等待、轮次完成、轮次停止 |
-| OpenCode | SQLite message 数据库，兼容旧版 JSON | 输入、缓存、输出、模型 | 轮次完成 |
-| Gemini CLI | `~/.gemini/tmp/*/chats/*.json` | 输入、输出、模型 | 暂无 |
+- Claude Code
+- Codex
+- OpenCode
+- MiMoCode
 
 运行提醒默认关闭，可以在设置里的「运行提醒」页签手动启用。它只是轻量提示，不会代替你处理权限，也不会对 Agent 执行任何操作。
 
