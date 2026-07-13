@@ -770,10 +770,22 @@ pub fn set_account_usage_provider_menu_bar_visible(
     Ok(provider_state)
 }
 
-/// 格式化 token 数量为可读字符串（用于 tray title）
+/// 格式化 token 数量为托盘可读文本
+///
+/// `total` 为原始 token 数量，返回 K/M 一位小数或 B 四位有效数字的文本
 pub fn format_token_count(total: i64) -> String {
     if total >= 1_000_000_000 {
-        format!("{:.1}B", total as f64 / 1_000_000_000.0)
+        let value = total as f64 / 1_000_000_000.0;
+        let precision = if value < 10.0 {
+            3
+        } else if value < 100.0 {
+            2
+        } else if value < 1_000.0 {
+            1
+        } else {
+            0
+        };
+        format!("{:.*}B", precision, value)
     } else if total >= 1_000_000 {
         format!("{:.1}M", total as f64 / 1_000_000.0)
     } else if total >= 1_000 {
@@ -809,7 +821,10 @@ mod tests {
         assert_eq!(format_token_count(500), "500");
         assert_eq!(format_token_count(1500), "1.5K");
         assert_eq!(format_token_count(1_500_000), "1.5M");
-        assert_eq!(format_token_count(1_500_000_000), "1.5B");
+        assert_eq!(format_token_count(1_500_000_000), "1.500B");
+        assert_eq!(format_token_count(15_000_000_000), "15.00B");
+        assert_eq!(format_token_count(150_000_000_000), "150.0B");
+        assert_eq!(format_token_count(1_500_000_000_000), "1500B");
         assert_eq!(format_token_count(0), "0");
     }
 

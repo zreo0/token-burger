@@ -18,7 +18,10 @@ describe('formatTokenCount', () => {
     });
 
     it('应格式化为 B', () => {
-        expect(formatTokenCount(1500000000)).toBe('1.5B');
+        expect(formatTokenCount(1500000000)).toBe('1.500B');
+        expect(formatTokenCount(15000000000)).toBe('15.00B');
+        expect(formatTokenCount(150000000000)).toBe('150.0B');
+        expect(formatTokenCount(1500000000000)).toBe('1500B');
     });
 });
 

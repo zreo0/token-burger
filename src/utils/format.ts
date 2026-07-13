@@ -1,9 +1,14 @@
 /**
- * token 数格式化（K/M/B 规则，保留一位小数）
+ * 格式化 token 数量
+ *
+ * @param count 原始 token 数量
+ * @returns K/M 保留一位小数，B 保留四位有效数字的展示文本
  */
 export function formatTokenCount(count: number): string {
     if (count >= 1_000_000_000) {
-        return `${(count / 1_000_000_000).toFixed(1)}B`;
+        const value = count / 1_000_000_000;
+        const precision = value < 10 ? 3 : value < 100 ? 2 : value < 1_000 ? 1 : 0;
+        return `${value.toFixed(precision)}B`;
     }
     if (count >= 1_000_000) {
         return `${(count / 1_000_000).toFixed(1)}M`;
