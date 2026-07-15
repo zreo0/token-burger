@@ -981,18 +981,27 @@ fn reset_credit_expiry_value(credit: &ResetCredit) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/**
+ * 根据接口返回的窗口时长生成用量标签
+ *
+ * `snapshot` 提供限额类型，`window` 提供窗口分钟数，`key` 用于缺少时长时回退
+ * 返回可直接展示的窗口标签
+ */
 fn window_label(snapshot: &RateLimitSnapshot, window: &RateLimitWindow, key: &str) -> String {
     if snapshot.limit_id == "codex" {
-        // Codex 固定按短窗/周窗展示；即使接口缺少窗口时长，也不要回退为通用文案。
-        if key == "primary" {
-            return "5h window".to_string();
+        if let Some(minutes) = window.window_minutes.filter(|minutes| *minutes > 0) {
+            if minutes % 1440 == 0 {
+                return format!("{}d window", minutes / 1440);
+            }
+            if minutes % 60 == 0 {
+                return format!("{}h window", minutes / 60);
+            }
+            return format!("{minutes}m window");
         }
-        if key == "secondary" {
-            return "7d window".to_string();
-        }
-        return match window.window_minutes {
-            Some(300) => "5h window".to_string(),
-            Some(10080) => "7d window".to_string(),
+
+        return match key {
+            "primary" => "Primary window".to_string(),
+            "secondary" => "Secondary window".to_string(),
             _ => "Codex window".to_string(),
         };
     }
@@ -1430,29 +1439,23 @@ mod tests {
     }
 
     #[test]
-    fn test_codex_labels_do_not_depend_on_window_minutes() {
+    fn test_codex_label_uses_primary_window_duration() {
         let metrics = rate_limits_to_metrics(&[RateLimitSnapshot {
             limit_id: "codex".to_string(),
             limit_name: None,
             primary: Some(RateLimitWindow {
                 used_percent: 2.0,
-                window_minutes: None,
+                window_minutes: Some(10080),
                 resets_at: None,
             }),
-            secondary: Some(RateLimitWindow {
-                used_percent: 8.0,
-                window_minutes: None,
-                resets_at: None,
-            }),
+            secondary: None,
             credits: None,
             plan_type: None,
         }]);
 
-        assert!(metrics.iter().any(|metric| metric.label == "5h window"));
-        assert!(metrics.iter().any(|metric| metric.label == "7d window"));
-        assert!(!metrics
-            .iter()
-            .any(|metric| metric.label.contains("额度窗口")));
+        assert_eq!(metrics.len(), 1);
+        assert_eq!(metrics[0].label, "7d window");
+        assert!(!metrics.iter().any(|metric| metric.label == "5h window"));
     }
 
     #[test]
