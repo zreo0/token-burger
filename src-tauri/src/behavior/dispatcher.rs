@@ -355,9 +355,7 @@ fn same_permission(tip: &BehaviorTip, event: &AgentBehaviorEvent) -> bool {
         return false;
     }
 
-    tip.call_id.is_some()
-        && tip.call_id == event.call_id
-        && (event.turn_id.is_none() || tip.turn_id == event.turn_id)
+    tip.call_id.is_some() && tip.call_id == event.call_id
 }
 
 #[cfg(test)]
@@ -490,6 +488,25 @@ mod tests {
             AgentBehaviorKind::PermissionResolved,
             "session-1",
             None,
+            Some("call-1"),
+        ));
+
+        assert!(queue.current().is_none());
+    }
+
+    #[test]
+    fn permission_resolved_matches_call_when_item_ids_differ() {
+        let mut queue = BehaviorQueue::default();
+        queue.handle_event(event(
+            AgentBehaviorKind::PermissionRequested,
+            "session-1",
+            Some("fc-1"),
+            Some("call-1"),
+        ));
+        queue.handle_event(event(
+            AgentBehaviorKind::PermissionResolved,
+            "session-1",
+            Some("fco-1"),
             Some("call-1"),
         ));
 

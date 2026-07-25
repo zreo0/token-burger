@@ -56,12 +56,13 @@ impl BehaviorExtractor for CodexAdapter {
         match batch {
             AgentDataBatch::JsonlIncrement {
                 content,
+                behavior_context,
                 token_context,
                 ..
             } => crate::behavior::codex::parse_events_with_context(
                 content,
                 batch.source_key(),
-                token_context.as_deref(),
+                behavior_context.as_deref().or(token_context.as_deref()),
             ),
             _ => batch
                 .behavior_content()
@@ -219,6 +220,7 @@ mod tests {
             source_key: "session.jsonl".to_string(),
             path: "session.jsonl".into(),
             content: content.to_string(),
+            behavior_context: None,
             token_context: None,
             initial_model: None,
             previous_offset: 0,

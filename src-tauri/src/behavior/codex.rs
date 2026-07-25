@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::{AgentBehaviorEvent, AgentBehaviorKind};
 
-const SESSION_META_SCAN_LINES: usize = 8;
+pub(crate) const SESSION_META_SCAN_LINES: usize = 8;
 
 /// 从 Codex JSONL 增量内容中解析行为事件
 pub fn parse_events(content: &str, session_hint: &str) -> Vec<AgentBehaviorEvent> {
@@ -131,7 +131,7 @@ fn parse_response_item(
 ) -> Option<AgentBehaviorEvent> {
     let payload_type = payload.get("type").and_then(Value::as_str)?;
     let call_id = call_id(payload)?;
-    let turn_id = turn_id(payload);
+    let turn_id = explicit_turn_id(payload);
 
     match payload_type {
         "function_call"
@@ -180,11 +180,20 @@ fn turn_id(payload: &Value) -> Option<String> {
         .map(ToString::to_string)
 }
 
+/// 读取显式轮次 ID，避免把 response item 自身 ID 误认为轮次
+fn explicit_turn_id(payload: &Value) -> Option<String> {
+    payload
+        .get("turn_id")
+        .or_else(|| payload.get("turnId"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
 fn call_id(payload: &Value) -> Option<String> {
     payload
         .get("call_id")
         .or_else(|| payload.get("callId"))
-        .or_else(|| payload.get("id"))
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
@@ -257,19 +266,21 @@ mod tests {
 
     #[test]
     fn parses_codex_permission_request_and_resolved() {
-        let content = r#"{"timestamp":"2026-06-01T10:00:00Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"call-1","turn_id":"turn-1","arguments":"{\"sandbox_permissions\":\"require_escalated\",\"cmd\":\"secret\"}"}}
-{"timestamp":"2026-06-01T10:00:10Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","turn_id":"turn-1","output":"hidden"}}"#;
+        let content = r#"{"timestamp":"2026-06-01T10:00:00Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"call-1","id":"fc-1","arguments":"{\"sandbox_permissions\":\"require_escalated\",\"cmd\":\"secret\"}"}}
+{"timestamp":"2026-06-01T10:00:10Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","id":"fco-1","output":"hidden"}}"#;
 
         let events = parse_events(content, "session");
 
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].kind, AgentBehaviorKind::PermissionRequested);
         assert_eq!(events[0].call_id.as_deref(), Some("call-1"));
+        assert!(events[0].turn_id.is_none());
         assert_eq!(events[0].summary, "Codex is waiting for permission");
         assert!(!serde_json::to_string(&events[0])
             .unwrap()
             .contains("secret"));
         assert_eq!(events[1].kind, AgentBehaviorKind::PermissionResolved);
+        assert!(events[1].turn_id.is_none());
     }
 
     #[test]

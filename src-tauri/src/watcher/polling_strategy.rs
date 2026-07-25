@@ -141,6 +141,7 @@ fn build_polling_batch(
             source_key: path.to_string(),
             path: entry.to_path_buf(),
             content: behavior_content,
+            behavior_context: None,
             token_context: Some(content),
             initial_model: None,
             previous_offset: file_offsets.get(path).copied().unwrap_or(0),

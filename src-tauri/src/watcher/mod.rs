@@ -303,6 +303,7 @@ fn cold_start_file_source(
                             source_key: path_str.clone(),
                             path: entry.clone(),
                             content,
+                            behavior_context: None,
                             token_context: None,
                             initial_model: None,
                             previous_offset: 0,

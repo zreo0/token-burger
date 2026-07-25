@@ -260,6 +260,11 @@ fn process_path_change(
             source_key: path_str.to_string(),
             path: path.to_path_buf(),
             content,
+            behavior_context: if agent_name == "codex" {
+                read_prefix_lines(path, crate::behavior::codex::SESSION_META_SCAN_LINES).ok()
+            } else {
+                None
+            },
             token_context: None,
             initial_model: None,
             previous_offset: 0,
@@ -354,6 +359,7 @@ fn build_changed_batch(
             source_key: path_str.to_string(),
             path: path.to_path_buf(),
             content,
+            behavior_context: None,
             token_context: None,
             initial_model: None,
             previous_offset: prev_offset,
@@ -362,6 +368,8 @@ fn build_changed_batch(
     }
 
     let behavior_content = read_from_offset(path, prev_offset)?;
+    let behavior_context =
+        read_prefix_lines(path, crate::behavior::codex::SESSION_META_SCAN_LINES)?;
     let (token_context, initial_model) = match codex_model_cache.get(path_str) {
         Some(model) => (None, Some(model.clone())),
         None => (
@@ -375,6 +383,7 @@ fn build_changed_batch(
         source_key: path_str.to_string(),
         path: path.to_path_buf(),
         content: behavior_content,
+        behavior_context: Some(behavior_context),
         token_context,
         initial_model,
         previous_offset: prev_offset,
@@ -423,6 +432,23 @@ pub(crate) fn read_from_offset(path: &std::path::Path, offset: u64) -> std::io::
     file.seek(SeekFrom::Start(offset))?;
     let mut content = String::new();
     file.read_to_string(&mut content)?;
+    Ok(content)
+}
+
+/// 读取 JSONL 文件开头的有限行，作为增量行为解析的稳定会话上下文
+fn read_prefix_lines(path: &std::path::Path, max_lines: usize) -> std::io::Result<String> {
+    use std::io::BufRead;
+
+    let file = std::fs::File::open(path)?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut content = String::new();
+
+    for _ in 0..max_lines {
+        if reader.read_line(&mut content)? == 0 {
+            break;
+        }
+    }
+
     Ok(content)
 }
 
@@ -488,6 +514,7 @@ mod tests {
             source_key: "/tmp/counting.jsonl".to_string(),
             path: "/tmp/counting.jsonl".into(),
             content: "{}\n".to_string(),
+            behavior_context: None,
             token_context: None,
             initial_model: None,
             previous_offset: 0,
@@ -577,6 +604,33 @@ mod tests {
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].model_id, "gpt-5.5");
         assert_eq!(cache.get(&path_str).map(String::as_str), Some("gpt-5.5"));
+    }
+
+    #[test]
+    fn codex_cached_increment_keeps_guardian_behavior_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("guardian.jsonl");
+        let initial = r#"{"type":"session_meta","payload":{"thread_source":"subagent","source":{"subagent":{"other":"guardian"}}}}
+{"type":"turn_context","payload":{"model":"codex-auto-review"}}
+"#;
+        std::fs::write(&path, initial).unwrap();
+        let path_str = path.to_string_lossy().to_string();
+        let adapter = CodexAdapter;
+        let mut cache = HashMap::from([(path_str.clone(), "codex-auto-review".to_string())]);
+
+        let incremental = r#"{"timestamp":"2026-07-25T10:50:14.728Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}
+"#;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(incremental.as_bytes()).unwrap();
+
+        let batch =
+            build_changed_batch(&path, &path_str, initial.len() as u64, "codex", &mut cache)
+                .unwrap();
+
+        assert!(adapter.extract_behavior(&batch).is_empty());
     }
 
     #[test]

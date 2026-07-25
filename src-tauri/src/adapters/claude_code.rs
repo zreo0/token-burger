@@ -164,6 +164,7 @@ mod tests {
             source_key: "test.jsonl".to_string(),
             path: "test.jsonl".into(),
             content: content.to_string(),
+            behavior_context: None,
             token_context: None,
             initial_model: None,
             previous_offset: 0,
