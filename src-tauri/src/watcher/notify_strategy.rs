@@ -607,6 +607,47 @@ mod tests {
     }
 
     #[test]
+    fn codex_thread_spawn_waits_for_live_boundary_across_increments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("subagent.jsonl");
+        let replay = r#"{"type":"session_meta","payload":{"source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}}}
+{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+{"timestamp":"2026-08-12T09:00:17.609Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":999}}}}
+"#;
+        std::fs::write(&path, replay).unwrap();
+        let path_str = path.to_string_lossy().to_string();
+        let adapter = CodexAdapter;
+        let mut cache = HashMap::new();
+
+        let batch = build_changed_batch(&path, &path_str, 0, "codex", &mut cache).unwrap();
+        let logs = extract_codex_logs(&adapter, &batch, &mut cache);
+
+        assert!(logs.is_empty());
+        assert!(!cache.contains_key(&path_str));
+
+        let live = r#"{"type":"inter_agent_communication_metadata"}
+{"timestamp":"2026-08-12T09:00:30.731Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":7}}}}
+"#;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(live.as_bytes()).unwrap();
+
+        let batch = build_changed_batch(&path, &path_str, replay.len() as u64, "codex", &mut cache)
+            .unwrap();
+        let logs = extract_codex_logs(&adapter, &batch, &mut cache);
+
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].token_count, 7);
+        assert_eq!(logs[0].model_id, "gpt-5.6-sol");
+        assert_eq!(
+            cache.get(&path_str).map(String::as_str),
+            Some("gpt-5.6-sol")
+        );
+    }
+
+    #[test]
     fn codex_cached_increment_keeps_guardian_behavior_context() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("guardian.jsonl");

@@ -10,6 +10,7 @@ pub struct CodexAdapter;
 pub(crate) struct CodexParseResult {
     pub logs: Vec<TokenLog>,
     pub final_model: String,
+    pub replay_pending: bool,
 }
 
 impl AgentSource for CodexAdapter {
@@ -46,7 +47,8 @@ impl TokenExtractor for CodexAdapter {
 
         TokenExtraction {
             logs: parsed.logs,
-            final_model: Some(parsed.final_model),
+            // 重放结束前不缓存模型，确保下一次增量继续带上完整文件上下文
+            final_model: (!parsed.replay_pending).then_some(parsed.final_model),
         }
     }
 }
@@ -74,6 +76,8 @@ impl BehaviorExtractor for CodexAdapter {
 
 pub(crate) fn parse_content_with_model(content: &str, initial_model: &str) -> CodexParseResult {
     let mut logs = Vec::new();
+    let mut saw_session_meta = false;
+    let mut replay_pending = false;
     let mut current_model = if initial_model.is_empty() {
         DEFAULT_CODEX_MODEL.to_string()
     } else {
@@ -90,8 +94,24 @@ pub(crate) fn parse_content_with_model(content: &str, initial_model: &str) -> Co
         }
         match serde_json::from_str::<serde_json::Value>(line) {
             Ok(val) => {
+                if !saw_session_meta {
+                    if let Some(is_thread_spawn) = parse_thread_spawn_session(&val) {
+                        saw_session_meta = true;
+                        replay_pending = is_thread_spawn;
+                    }
+                }
+
                 if let Some(model) = parse_turn_model(&val) {
                     current_model = model.to_string();
+                    continue;
+                }
+
+                if replay_pending {
+                    if val.get("type").and_then(|v| v.as_str())
+                        == Some("inter_agent_communication_metadata")
+                    {
+                        replay_pending = false;
+                    }
                     continue;
                 }
 
@@ -108,7 +128,23 @@ pub(crate) fn parse_content_with_model(content: &str, initial_model: &str) -> Co
     CodexParseResult {
         logs,
         final_model: current_model,
+        replay_pending,
     }
+}
+
+/// 识别首个会话元数据是否来自 thread_spawn 子代理
+fn parse_thread_spawn_session(val: &serde_json::Value) -> Option<bool> {
+    if val.get("type").and_then(|v| v.as_str()) != Some("session_meta") {
+        return None;
+    }
+
+    Some(
+        val.get("payload")
+            .and_then(|payload| payload.get("source"))
+            .and_then(|source| source.get("subagent"))
+            .and_then(|subagent| subagent.get("thread_spawn"))
+            .is_some(),
+    )
 }
 
 fn parse_turn_model(val: &serde_json::Value) -> Option<&str> {
@@ -296,6 +332,48 @@ mod tests {
         assert_eq!(logs.len(), 2);
         assert_eq!(logs[0].model_id, "gpt-5.4");
         assert_eq!(logs[1].model_id, "gpt-5.5");
+    }
+
+    #[test]
+    fn test_thread_spawn_skips_replayed_usage() {
+        let content = r#"{"type":"session_meta","payload":{"source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}}}
+{"timestamp":"2026-08-12T09:00:17.609Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":999}}}}
+{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+{"type":"inter_agent_communication_metadata"}
+{"timestamp":"2026-08-12T09:00:30.731Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":7}}}}"#;
+        let adapter = CodexAdapter;
+        let extraction = adapter.extract_tokens(&jsonl_batch(content));
+
+        assert_eq!(extraction.logs.len(), 1);
+        assert_eq!(extraction.logs[0].token_count, 7);
+        assert_eq!(extraction.logs[0].model_id, "gpt-5.6-sol");
+        assert_eq!(extraction.final_model.as_deref(), Some("gpt-5.6-sol"));
+    }
+
+    #[test]
+    fn test_thread_spawn_without_live_boundary_keeps_model_cache_empty() {
+        let content = r#"{"type":"session_meta","payload":{"source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}}}
+{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+{"timestamp":"2026-08-12T09:00:17.609Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":999}}}}"#;
+        let adapter = CodexAdapter;
+        let extraction = adapter.extract_tokens(&jsonl_batch(content));
+
+        assert!(extraction.logs.is_empty());
+        assert!(extraction.final_model.is_none());
+    }
+
+    #[test]
+    fn test_guardian_subagent_counts_usage_without_live_boundary() {
+        let content = r#"{"type":"session_meta","payload":{"source":{"subagent":{"other":"guardian"}}}}
+{"type":"turn_context","payload":{"model":"codex-auto-review"}}
+{"timestamp":"2026-08-12T09:00:17.609Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":5}}}}"#;
+        let adapter = CodexAdapter;
+        let extraction = adapter.extract_tokens(&jsonl_batch(content));
+
+        assert_eq!(extraction.logs.len(), 1);
+        assert_eq!(extraction.logs[0].token_count, 5);
+        assert_eq!(extraction.logs[0].model_id, "codex-auto-review");
+        assert_eq!(extraction.final_model.as_deref(), Some("codex-auto-review"));
     }
 
     #[test]
