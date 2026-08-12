@@ -18,16 +18,18 @@ import { useAccountUsageContext } from '../../context/AccountUsageContext';
 import claudeCodeProviderIcon from '../../assets/provider-icons/claude-code.svg';
 import openaiProviderIcon from '../../assets/provider-icons/openai.svg';
 import githubCopilotProviderIcon from '../../assets/provider-icons/github-copilot.svg';
+import opencodeProviderIcon from '../../assets/provider-icons/opencode.svg';
 import './index.css';
 
 type Tab = 'general' | 'agents' | 'alerts' | 'data' | 'usage' | 'about';
 
 // 账号用量 Provider 逐个开放，菜单栏展示仅对可计算百分比的 Provider 启用。
-const VISIBLE_USAGE_PROVIDER_IDS = new Set(['codex', 'github-copilot']);
+const VISIBLE_USAGE_PROVIDER_IDS = new Set(['codex', 'github-copilot', 'opencode-go']);
 const USAGE_PROVIDER_ICONS: Record<string, string> = {
     codex: openaiProviderIcon,
     'claude-code': claudeCodeProviderIcon,
     'github-copilot': githubCopilotProviderIcon,
+    'opencode-go': opencodeProviderIcon,
 };
 
 type UpdateStatus =
@@ -490,22 +492,37 @@ function Settings() {
                                                         onSubmit={(e) => {
                                                             e.preventDefault();
                                                             const formData = new FormData(e.currentTarget);
-                                                            const firstRequirement = provider.credential_requirements[0];
-                                                            const secret = String(formData.get(firstRequirement.key) ?? '');
-                                                            saveCredential(provider.id, firstRequirement.key, secret, firstRequirement.label);
+                                                            const secretRequirement = provider.credential_requirements.find(req => req.secret);
+                                                            if (!secretRequirement) return;
+                                                            const accountRequirement = provider.credential_requirements.find(req => !req.secret);
+                                                            const accountKey = accountRequirement
+                                                                ? String(formData.get(accountRequirement.key) ?? '').trim()
+                                                                : undefined;
+                                                            const secret = String(formData.get(secretRequirement.key) ?? '').trim();
+
+                                                            // 多字段 Provider 将公开账号标识复用为 account_key，密钥仍只进入系统凭据存储
+                                                            saveCredential(
+                                                                provider.id,
+                                                                secretRequirement.key,
+                                                                secret,
+                                                                accountKey || secretRequirement.label,
+                                                                accountKey,
+                                                            );
                                                         }}
                                                     >
-                                                        {provider.credential_requirements.map(req => (
-                                                            <label key={req.key} className="usage-credential-inline-field">
-                                                                <span>{req.label}</span>
-                                                                <input
-                                                                    name={req.key}
-                                                                    type={req.secret ? 'password' : 'text'}
-                                                                    placeholder={req.description}
-                                                                    required={req.required}
-                                                                />
-                                                            </label>
-                                                        ))}
+                                                        <div className="usage-credential-inline-fields">
+                                                            {provider.credential_requirements.map(req => (
+                                                                <label key={req.key} className="usage-credential-inline-field">
+                                                                    <span>{req.label}</span>
+                                                                    <input
+                                                                        name={req.key}
+                                                                        type={req.secret ? 'password' : 'text'}
+                                                                        placeholder={req.description}
+                                                                        required={req.required}
+                                                                    />
+                                                                </label>
+                                                            ))}
+                                                        </div>
                                                         <button type="submit" className="mac-btn">{t('usage.saveCredential', 'Save Credential')}</button>
                                                         <button type="button" className="mac-btn danger-text" onClick={() => clearCredential(provider.id)}>{t('usage.clearCredential', 'Clear')}</button>
                                                     </form>

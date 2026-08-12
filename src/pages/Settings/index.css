@@ -440,6 +440,13 @@
     padding: 0 16px 12px 56px;
 }
 
+.settings-container .usage-credential-inline-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 8px;
+    min-width: 0;
+}
+
 .settings-container .usage-credential-inline-field {
     display: flex;
     flex-direction: column;

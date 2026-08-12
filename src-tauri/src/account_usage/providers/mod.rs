@@ -2,6 +2,7 @@ pub mod claude_code;
 pub mod codex;
 pub mod cursor;
 pub mod github_copilot;
+pub mod opencode_go;
 
 use crate::account_usage::AccountUsageProvider;
 
@@ -11,5 +12,6 @@ pub fn all_providers() -> Vec<Box<dyn AccountUsageProvider>> {
         Box::new(claude_code::ClaudeCodeUsageProvider),
         Box::new(cursor::CursorUsageProvider),
         Box::new(github_copilot::GithubCopilotUsageProvider),
+        Box::new(opencode_go::OpenCodeGoUsageProvider),
     ]
 }
