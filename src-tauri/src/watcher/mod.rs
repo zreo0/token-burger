@@ -220,6 +220,7 @@ fn cold_start_adapter(
                     local_db_path,
                     write_tx,
                     since,
+                    keep_days,
                 ) {
                     Ok(count) => {
                         log::info!("[冷启动] {} 完成: {} 条 SQLite row", agent_name, count);
@@ -380,6 +381,7 @@ fn start_watchers(
 
     let is_realtime = config.watch_mode == "realtime";
     let poll_secs = config.polling_interval_secs;
+    let keep_days = config.keep_days;
 
     // JSONL 文件：realtime 用 notify，polling 用定时轮询
     if !jsonl_agents.is_empty() {
@@ -464,6 +466,7 @@ fn start_watchers(
                     stop_flag: flag,
                     poll_interval_secs: poll_secs,
                     initial_offset,
+                    keep_days,
                     behavior_runtime,
                 });
             });

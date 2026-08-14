@@ -134,7 +134,7 @@ function Settings() {
 
     const handleClearData = async (all: boolean) => {
         try {
-            const keepDays = all ? null : settings?.keep_days ?? 365;
+            const keepDays = all ? null : settings?.keep_days ?? 90;
             await invoke('clear_data', { keepDays });
             setConfirmAction(null);
         } catch {

@@ -36,6 +36,8 @@ pub struct SqlitePollingConfig {
     pub poll_interval_secs: u32,
     /// 旧版全局 offset，用于冷启动迁移
     pub initial_offset: Option<u64>,
+    /// 首次无 cursor 时扫描的历史天数
+    pub keep_days: u32,
     /// 行为提醒运行时
     pub behavior_runtime: Option<BehaviorRuntime>,
 }
@@ -50,6 +52,7 @@ pub fn run_sqlite_polling(config: SqlitePollingConfig) {
         stop_flag,
         poll_interval_secs,
         initial_offset,
+        keep_days,
         behavior_runtime,
     } = config;
     let agents = all_agents();
@@ -107,6 +110,7 @@ pub fn run_sqlite_polling(config: SqlitePollingConfig) {
                 &local_db_path,
                 &source_key,
                 initial_offset,
+                sqlite_initial_cursor_time(keep_days),
                 &write_tx,
             ) {
                 Ok(cursors) => Some(cursors),
@@ -164,6 +168,7 @@ pub(crate) fn cold_start_sqlite_source(
     local_db_path: &Path,
     write_tx: &Sender<WriteRequest>,
     old_global_watermark: Option<u64>,
+    keep_days: u32,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     let source_key = super::sqlite_offset_key(db_path);
     let conn = open_external_readonly(db_path)?;
@@ -173,6 +178,7 @@ pub(crate) fn cold_start_sqlite_source(
         local_db_path,
         &source_key,
         old_global_watermark,
+        sqlite_initial_cursor_time(keep_days),
         write_tx,
     )?;
     let mut total_rows = 0usize;
@@ -221,6 +227,7 @@ fn load_or_bootstrap_cursors(
     local_db_path: &Path,
     source_key: &str,
     old_global_watermark: Option<u64>,
+    initial_cursor_time: i64,
     write_tx: &Sender<WriteRequest>,
 ) -> Result<Vec<ExternalSqliteCursor>, Box<dyn std::error::Error>> {
     let existing = load_local_cursors(local_db_path, source_key)?;
@@ -237,10 +244,28 @@ fn load_or_bootstrap_cursors(
         return Ok(cursors);
     }
 
-    Ok(session_ids
+    let cursors = session_ids
         .iter()
-        .map(|session_id| ExternalSqliteCursor::empty(source_key, session_id))
-        .collect())
+        .map(|session_id| ExternalSqliteCursor {
+            source_key: source_key.to_string(),
+            session_id: session_id.clone(),
+            created_time: initial_cursor_time,
+            created_id: String::new(),
+            updated_time: initial_cursor_time,
+        })
+        .collect::<Vec<_>>();
+    if !cursors.is_empty() && !write_sqlite_cursors(write_tx, cursors.clone()) {
+        return Err("写入首次 SQLite cursor 失败".into());
+    }
+
+    Ok(cursors)
+}
+
+/// 计算首次 SQLite cursor 的历史扫描起点
+///
+/// `keep_days` 为需要回溯的天数，返回 UTC epoch 毫秒时间戳
+fn sqlite_initial_cursor_time(keep_days: u32) -> i64 {
+    (chrono::Utc::now() - chrono::Duration::days(keep_days as i64)).timestamp_millis()
 }
 
 fn load_local_cursors(
@@ -578,7 +603,7 @@ mod tests {
             &self,
             _conn: &rusqlite::Connection,
         ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-            Ok(vec!["session-1".to_string()])
+            Ok(vec!["old-session".to_string()])
         }
 
         fn query_sqlite_rows_by_created_cursor(
@@ -589,19 +614,20 @@ mod tests {
             id: &str,
             _limit: usize,
         ) -> Result<SqliteRowBatch, Box<dyn std::error::Error>> {
-            if time_created != 0 || !id.is_empty() {
+            if !id.is_empty() {
                 return Ok(SqliteRowBatch::default());
             }
 
+            let message_time = time_created.saturating_add(1);
             Ok(SqliteRowBatch {
                 rows: vec![SqliteMessageRow {
                     id: "msg-1".to_string(),
-                    session_id: Some("session-1".to_string()),
+                    session_id: Some("old-session".to_string()),
                     data: "{}".to_string(),
-                    time_created: 1000,
-                    watermark: 1200,
+                    time_created: message_time,
+                    watermark: message_time,
                 }],
-                high_watermark: Some(1200),
+                high_watermark: Some(message_time as u64),
             })
         }
     }
@@ -615,7 +641,7 @@ mod tests {
                 model_id: "test-model".to_string(),
                 token_type: TokenType::Input,
                 token_count: 1,
-                session_id: Some("session-1".to_string()),
+                session_id: Some("old-session".to_string()),
                 request_id: Some("msg-1-input".to_string()),
                 latency_ms: None,
                 is_error: false,
@@ -720,8 +746,9 @@ mod tests {
         );
     }
 
+    /// 验证首次接入只从保留期起点扫描，并能读取旧会话的新消息
     #[test]
-    fn cold_start_without_old_watermark_establishes_cursor_after_write() {
+    fn cold_start_without_old_watermark_uses_keep_days() {
         let dir = tempfile::tempdir().unwrap();
         let local_db_path = dir.path().join("local.db");
         let external_db_path = dir.path().join("first-catch-up.db");
@@ -749,19 +776,75 @@ mod tests {
         });
 
         let agent = FirstCatchUpAgent;
-        let count =
-            cold_start_sqlite_source(&agent, &external_db_path, &local_db_path, &write_tx, None)
-                .unwrap();
+        let before = sqlite_initial_cursor_time(90);
+        let count = cold_start_sqlite_source(
+            &agent,
+            &external_db_path,
+            &local_db_path,
+            &write_tx,
+            None,
+            90,
+        )
+        .unwrap();
+        let after = sqlite_initial_cursor_time(90);
+        let (initial_log_count, initial_cursors) = capture_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
         let (log_count, cursors) = capture_rx
             .recv_timeout(std::time::Duration::from_secs(1))
             .unwrap();
 
         assert_eq!(count, 1);
+        assert_eq!(initial_log_count, 0);
+        assert_eq!(initial_cursors.len(), 1);
+        assert!(initial_cursors[0].created_time >= before);
+        assert!(initial_cursors[0].created_time <= after);
+        assert_eq!(
+            initial_cursors[0].updated_time,
+            initial_cursors[0].created_time
+        );
         assert_eq!(log_count, 1);
         assert_eq!(cursors.len(), 1);
-        assert_eq!(cursors[0].created_time, 1000);
+        assert_eq!(cursors[0].created_time, initial_cursors[0].created_time + 1);
         assert_eq!(cursors[0].created_id, "msg-1");
-        assert_eq!(cursors[0].updated_time, 1200);
+        assert_eq!(cursors[0].updated_time, cursors[0].created_time);
+    }
+
+    /// 验证已有 SQLite cursor 不会被新的保留期起点覆盖
+    #[test]
+    fn existing_cursor_takes_precedence_over_keep_days() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_db_path = dir.path().join("local.db");
+        let conn = rusqlite::Connection::open(&local_db_path).unwrap();
+        conn.execute_batch(crate::db::SCHEMA_SQL).unwrap();
+        let existing = ExternalSqliteCursor {
+            source_key: "sqlite:/tmp/bootstrap.db".to_string(),
+            session_id: "session-1".to_string(),
+            created_time: 1000,
+            created_id: "msg-1".to_string(),
+            updated_time: 1200,
+        };
+        queries::upsert_external_sqlite_cursors(&conn, std::slice::from_ref(&existing)).unwrap();
+        drop(conn);
+        let external_conn = rusqlite::Connection::open_in_memory().unwrap();
+        let agent = BootstrapAgent {
+            sessions: vec!["session-1".to_string()],
+            cursors: HashMap::new(),
+        };
+        let (write_tx, _write_rx) = std::sync::mpsc::channel();
+
+        let cursors = load_or_bootstrap_cursors(
+            &agent,
+            &external_conn,
+            &local_db_path,
+            "sqlite:/tmp/bootstrap.db",
+            None,
+            9000,
+            &write_tx,
+        )
+        .unwrap();
+
+        assert_eq!(cursors, vec![existing]);
     }
 
     #[test]

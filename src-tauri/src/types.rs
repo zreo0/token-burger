@@ -56,7 +56,7 @@ impl Default for AppSettings {
                 "mimocode".into(),
             ],
             watch_mode: "realtime".into(),
-            keep_days: 365,
+            keep_days: 90,
             polling_interval_secs: 10,
             language: "en".into(),
             color_theme: "warm".into(),
@@ -108,10 +108,12 @@ pub struct PlatformInfo {
 mod tests {
     use super::*;
 
+    /// 验证未配置的新用户使用预期默认设置
     #[test]
-    fn app_settings_default_disables_behavior_tips() {
+    fn app_settings_uses_expected_defaults() {
         let settings = AppSettings::default();
 
+        assert_eq!(settings.keep_days, 90);
         assert!(!settings.behavior_tips_enabled);
     }
 }
