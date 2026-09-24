@@ -254,6 +254,7 @@ fn cold_start_file_source(
     let mut total_records = 0u32;
     let mut skipped_old = 0u32;
     let mut skipped_known = 0u32;
+    let mut seen_paths = std::collections::HashSet::new();
 
     for base_path in &paths {
         for pattern in &agent.log_paths() {
@@ -265,6 +266,16 @@ fn cold_start_file_source(
                 }
             };
             for entry in entries.flatten() {
+                let canonical = entry.canonicalize().unwrap_or_else(|_| entry.clone());
+                if !seen_paths.insert(canonical) {
+                    continue;
+                }
+                let path_str = entry.to_string_lossy().to_string();
+                let reindex_claude = agent_name == "claude-code"
+                    && !known_offsets
+                        .contains_key(&crate::db::queries::claude_parser_marker(&path_str));
+                let repair_existing_claude =
+                    reindex_claude && known_offsets.contains_key(&path_str);
                 // mtime 过滤
                 if let Ok(meta) = std::fs::metadata(&entry) {
                     if let Ok(mtime) = meta.modified() {
@@ -272,7 +283,7 @@ fn cold_start_file_source(
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs() as i64;
-                        if mtime_ts < cutoff_ts {
+                        if !repair_existing_claude && mtime_ts < cutoff_ts {
                             skipped_old += 1;
                             continue;
                         }
@@ -280,7 +291,7 @@ fn cold_start_file_source(
                     // offset 过滤：文件大小未变则跳过
                     let path_str = entry.to_string_lossy().to_string();
                     if let Some(&prev_offset) = known_offsets.get(&path_str) {
-                        if meta.len() <= prev_offset {
+                        if !reindex_claude && meta.len() <= prev_offset {
                             skipped_known += 1;
                             continue;
                         }
@@ -325,6 +336,33 @@ fn cold_start_file_source(
                     let count = logs.len() as u32;
                     total_files += 1;
                     total_records += count;
+                    if reindex_claude {
+                        // 使用已读取内容的长度，避免读完后文件追加导致 offset 越过未解析内容
+                        let next_offset =
+                            batch.token_content().map(str::len).unwrap_or_default() as u64;
+                        let (result_tx, result_rx) = std::sync::mpsc::channel();
+                        if write_tx
+                            .send(WriteRequest::ReindexClaudeFile {
+                                logs,
+                                file_path: path_str.clone(),
+                                offset: next_offset,
+                                result_tx,
+                            })
+                            .is_ok()
+                        {
+                            match result_rx.recv() {
+                                Ok(Ok(())) => {
+                                    updated_offsets.push((
+                                        crate::db::queries::claude_parser_marker(&path_str),
+                                        0,
+                                    ));
+                                    updated_offsets.push((path_str, next_offset));
+                                }
+                                result => log::warn!("Claude 日志重算未完成: {:?}", result),
+                            }
+                        }
+                        continue;
+                    }
                     if !logs.is_empty() {
                         let _ = write_tx.send(WriteRequest::InsertTokenLogs(logs));
                     }
@@ -487,6 +525,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     struct ColdStartCountingAgent {
+        name: &'static str,
         pattern: String,
         token_calls: Arc<AtomicUsize>,
         behavior_calls: Arc<AtomicUsize>,
@@ -494,7 +533,7 @@ mod tests {
 
     impl AgentSource for ColdStartCountingAgent {
         fn agent_name(&self) -> &str {
-            "counting"
+            self.name
         }
 
         fn data_source(&self) -> DataSource {
@@ -551,6 +590,7 @@ mod tests {
         let token_calls = Arc::new(AtomicUsize::new(0));
         let behavior_calls = Arc::new(AtomicUsize::new(0));
         let agent = ColdStartCountingAgent {
+            name: "counting",
             pattern: path.to_string_lossy().to_string(),
             token_calls: token_calls.clone(),
             behavior_calls: behavior_calls.clone(),
@@ -567,6 +607,54 @@ mod tests {
         );
 
         assert_eq!(updated_offsets.len(), 1);
+        assert_eq!(token_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(behavior_calls.load(Ordering::Relaxed), 0);
+    }
+
+    /**
+     * 验证 Claude 升级会重读已有 offset，成功标记后恢复正常跳过且不触发行为解析
+     */
+    #[test]
+    fn claude_reindex_ignores_old_offsets_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, "{}\n").unwrap();
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1))
+            .unwrap();
+        let token_calls = Arc::new(AtomicUsize::new(0));
+        let behavior_calls = Arc::new(AtomicUsize::new(0));
+        let agent = ColdStartCountingAgent {
+            name: "claude-code",
+            pattern: path.to_string_lossy().to_string(),
+            token_calls: token_calls.clone(),
+            behavior_calls: behavior_calls.clone(),
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let writer =
+            std::thread::spawn(
+                move || match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+                    WriteRequest::ReindexClaudeFile { result_tx, .. } => {
+                        result_tx.send(Ok(())).unwrap()
+                    }
+                    _ => panic!("expected atomic reindex"),
+                },
+            );
+        let mut offsets =
+            std::collections::HashMap::from([(path.to_string_lossy().to_string(), 3)]);
+        let updated = cold_start_adapter(&agent, &tx, 365, &offsets, &dir.path().join("local.db"));
+        writer.join().unwrap();
+        offsets.extend(updated);
+        cold_start_adapter(&agent, &tx, 365, &offsets, &dir.path().join("local.db"));
+        // 没有旧 offset 的过期文件仍遵守保留天数，不因解析器升级而重新导入
+        cold_start_adapter(
+            &agent,
+            &tx,
+            365,
+            &std::collections::HashMap::new(),
+            &dir.path().join("local.db"),
+        );
         assert_eq!(token_calls.load(Ordering::Relaxed), 1);
         assert_eq!(behavior_calls.load(Ordering::Relaxed), 0);
     }

@@ -597,9 +597,59 @@ mod tests {
         assert!(state.retry_after_until.is_some());
     }
 
+    /**
+     * 用固定结果替换真实 Provider 的刷新，避免管理器测试读取本机凭据
+     */
+    struct RefreshFixture(SharedAccountUsageProvider);
+
+    impl crate::account_usage::AccountUsageProvider for RefreshFixture {
+        /**
+         * 返回被替换 Provider 的标识
+         */
+        fn id(&self) -> &'static str {
+            self.0.id()
+        }
+        /**
+         * 保持被替换 Provider 的刷新间隔
+         */
+        fn default_refresh_interval_secs(&self) -> u64 {
+            self.0.default_refresh_interval_secs()
+        }
+        /**
+         * 保持设置页元数据，不触发真实刷新
+         */
+        fn info(&self, state: &AccountUsageProviderState) -> AccountUsageProviderInfo {
+            self.0.info(state)
+        }
+        /**
+         * 测试中的数据源固定可用
+         */
+        fn detect(&self) -> bool {
+            true
+        }
+        /**
+         * 返回一个失败和一个成功结果，用于验证刷新错误隔离
+         */
+        fn refresh(&self, _context: AccountUsageRefreshContext) -> AccountUsageResult {
+            if self.id() == "codex" {
+                Err(AccountUsageError::new(
+                    AccountUsageStatus::Network,
+                    "fixture error",
+                ))
+            } else {
+                Ok(vec![sample_snapshot(self.id())])
+            }
+        }
+    }
+
     #[test]
     fn test_refresh_all_continues_after_provider_error() {
-        let (_temp, manager) = setup_manager();
+        let (_temp, mut manager) = setup_manager();
+        manager.providers = manager
+            .providers
+            .into_iter()
+            .map(|provider| Arc::new(RefreshFixture(provider)) as SharedAccountUsageProvider)
+            .collect();
         manager
             .set_provider_enabled("codex".to_string(), true, None)
             .unwrap();

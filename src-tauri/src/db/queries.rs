@@ -7,6 +7,31 @@ use crate::types::{AppSettings, TokenSummary};
 
 const BATCH_SIZE: usize = 1000;
 
+/**
+ * 根据文件路径返回 Claude 解析版本标记，用于一次性重算已有日志
+ */
+pub(crate) fn claude_parser_marker(path: &str) -> String {
+    format!("claude-parser-v2:{path}")
+}
+
+/**
+ * 原子写入重算后的 Claude 日志、文件位置和版本标记，失败时允许下次重试
+ */
+pub(crate) fn reindex_claude_file(
+    conn: &Connection,
+    logs: &[TokenLog],
+    file_path: &str,
+    offset: u64,
+) -> Result<(), rusqlite::Error> {
+    let tx = conn.unchecked_transaction()?;
+    for chunk in logs.chunks(BATCH_SIZE) {
+        insert_token_log_chunk(&tx, chunk, INSERT_TOKEN_LOG_SQL)?;
+    }
+    update_offset(&tx, file_path, offset)?;
+    update_offset(&tx, &claude_parser_marker(file_path), 0)?;
+    tx.commit()
+}
+
 const INSERT_TOKEN_LOG_SQL: &str = "
     INSERT INTO token_logs
     (agent_name, provider, model_id, token_type, token_count,
@@ -23,7 +48,12 @@ const INSERT_TOKEN_LOG_SQL: &str = "
         metadata = excluded.metadata,
         cost = excluded.cost,
         timestamp = excluded.timestamp
-    WHERE token_logs.agent_name = 'codex' AND token_logs.model_id = 'codex'
+    WHERE (token_logs.agent_name = 'codex' AND token_logs.model_id = 'codex')
+       OR (token_logs.agent_name = 'claude-code' AND excluded.agent_name = 'claude-code'
+           AND excluded.request_id LIKE 'claude:%'
+           AND (COALESCE(json_extract(token_logs.metadata, '$.claude_incomplete'), 0) = 1
+                OR (COALESCE(json_extract(excluded.metadata, '$.claude_incomplete'), 0) = 0
+                    AND julianday(excluded.timestamp) >= julianday(token_logs.timestamp))))
 ";
 
 const UPSERT_TOKEN_LOG_SQL: &str = "
@@ -66,6 +96,26 @@ fn insert_token_log_chunk(
             .ok()
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| "input".to_string());
+
+        // 仅替换仍可从源日志确认的旧 uuid 记录，保留已无源文件的历史数据
+        if log.agent_name == "claude-code" {
+            if let Some(legacy) = log
+                .metadata
+                .as_deref()
+                .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+                .and_then(|value| {
+                    value
+                        .get("claude_legacy_id")
+                        .and_then(|id| id.as_str())
+                        .map(str::to_owned)
+                })
+            {
+                conn.execute(
+                    "DELETE FROM token_logs WHERE agent_name = 'claude-code' AND request_id = ?1 AND token_type = ?2",
+                    params![format!("{legacy}-{token_type_str}"), token_type_str],
+                )?;
+            }
+        }
 
         stmt.execute(params![
             log.agent_name,

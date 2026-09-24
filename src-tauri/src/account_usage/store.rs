@@ -163,6 +163,18 @@ pub fn upsert_snapshot(
     for metric in &snapshot.metrics {
         insert_metric(&tx, snapshot_id, metric)?;
     }
+    // Claude 当前只读取一份活动凭据，成功切换后移除旧账号及旧版本本地占位快照
+    if snapshot.provider_id == "claude-code" && snapshot.status == AccountUsageStatus::Ok {
+        tx.execute(
+            "DELETE FROM account_usage_metrics WHERE snapshot_id IN
+             (SELECT id FROM account_usage_snapshots WHERE provider_id = 'claude-code' AND id != ?1)",
+            [snapshot_id],
+        )?;
+        tx.execute(
+            "DELETE FROM account_usage_snapshots WHERE provider_id = 'claude-code' AND id != ?1",
+            [snapshot_id],
+        )?;
+    }
     tx.commit()
 }
 

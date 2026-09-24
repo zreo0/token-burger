@@ -237,6 +237,15 @@ pub fn open_readonly(db_path: &PathBuf) -> Result<Connection, rusqlite::Error> {
 pub enum WriteRequest {
     /// 批量插入 token logs
     InsertTokenLogs(Vec<TokenLog>),
+    /**
+     * 重算单个 Claude 文件并确认持久化，避免失败时提前推进解析版本
+     */
+    ReindexClaudeFile {
+        logs: Vec<TokenLog>,
+        file_path: String,
+        offset: u64,
+        result_tx: mpsc::Sender<Result<(), String>>,
+    },
     /// 批量插入 token logs，并在同一事务内更新外部 SQLite cursor
     InsertTokenLogsAndUpdateSqliteCursors {
         logs: Vec<TokenLog>,
@@ -276,6 +285,16 @@ impl DbManager {
 
             while let Ok(req) = write_rx.recv() {
                 match req {
+                    WriteRequest::ReindexClaudeFile {
+                        logs,
+                        file_path,
+                        offset,
+                        result_tx,
+                    } => {
+                        let result = queries::reindex_claude_file(&conn, &logs, &file_path, offset)
+                            .map_err(|error| error.to_string());
+                        let _ = result_tx.send(result);
+                    }
                     WriteRequest::InsertTokenLogs(logs) => {
                         let count = logs.len();
                         let total_tokens: i64 = logs.iter().map(|l| l.token_count).sum();

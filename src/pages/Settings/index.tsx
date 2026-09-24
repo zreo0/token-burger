@@ -440,7 +440,8 @@ function Settings() {
                                             : provider.credential_requirements?.length > 0
                                                 ? t('usage.requiresCredential', 'Requires credential')
                                                 : t('usage.notDetected', 'Auth file or credential not detected');
-                                        const shouldShowCredentialForm = provider.credential_requirements?.length > 0 && !provider.available;
+                                        const shouldShowCredentialForm = provider.credential_requirements?.length > 0
+                                            && (!provider.available || provider.id === 'claude-code');
                                         const statusKey = usageProviderStatusKey(provider);
 
                                         return (
