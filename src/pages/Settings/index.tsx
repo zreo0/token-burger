@@ -24,7 +24,7 @@ import './index.css';
 type Tab = 'general' | 'agents' | 'alerts' | 'data' | 'usage' | 'about';
 
 // 账号用量 Provider 逐个开放，菜单栏展示仅对可计算百分比的 Provider 启用。
-const VISIBLE_USAGE_PROVIDER_IDS = new Set(['codex', 'github-copilot', 'opencode-go']);
+const VISIBLE_USAGE_PROVIDER_IDS = new Set(['codex', 'claude-code', 'github-copilot', 'opencode-go']);
 const USAGE_PROVIDER_ICONS: Record<string, string> = {
     codex: openaiProviderIcon,
     'claude-code': claudeCodeProviderIcon,
