@@ -16,22 +16,6 @@ impl MenuBarUsageItem {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn account_usage_percentage_suffix(conn: &rusqlite::Connection) -> Option<String> {
-    let items = account_usage_menu_bar_items(conn);
-    if items.is_empty() {
-        None
-    } else {
-        Some(
-            items
-                .iter()
-                .map(|item| item.usage_title())
-                .collect::<Vec<_>>()
-                .join(" "),
-        )
-    }
-}
-
 pub(crate) fn account_usage_menu_bar_items(conn: &rusqlite::Connection) -> Vec<MenuBarUsageItem> {
     let states = match crate::account_usage::store::list_provider_states(conn) {
         Ok(states) => states,

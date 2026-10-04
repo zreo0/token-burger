@@ -40,6 +40,22 @@ impl AgentSource for MiMoCodeAdapter {
         list_session_ids(conn)
     }
 
+    /** 按消息变动时间筛选活跃会话，避免启动期反复查询所有历史会话 */
+    fn list_recent_sqlite_session_ids(
+        &self,
+        conn: &rusqlite::Connection,
+        since: i64,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let watermark = mimocode_watermark_column(conn)?;
+        let sql = format!("SELECT DISTINCT COALESCE(session_id, ?1) FROM message WHERE time_created >= ?2 OR {watermark} >= ?2 ORDER BY 1");
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement
+            .query_map(rusqlite::params![SQLITE_NULL_SESSION_ID, since], |row| {
+                row.get::<_, String>(0)
+            })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     fn query_sqlite_rows_by_created_cursor(
         &self,
         conn: &rusqlite::Connection,

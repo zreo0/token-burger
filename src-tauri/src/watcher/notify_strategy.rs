@@ -242,7 +242,7 @@ fn process_path_change(
             prev_offset,
             new_size
         );
-        let content = match read_from_offset(path, 0) {
+        let content = match read_complete_jsonl(path, 0) {
             Ok(content) => content,
             Err(err) => {
                 log::warn!(
@@ -255,6 +255,7 @@ fn process_path_change(
                 return;
             }
         };
+        let read_offset = content.len() as u64;
         let batch = AgentDataBatch::JsonlIncrement {
             agent_name: agent_name.to_string(),
             source_key: path_str.to_string(),
@@ -268,7 +269,7 @@ fn process_path_change(
             token_context: None,
             initial_model: None,
             previous_offset: 0,
-            next_offset: new_size,
+            next_offset: read_offset,
         };
         let extraction = agent.extract_tokens(&batch);
         if let Some(final_model) = extraction.final_model {
@@ -285,10 +286,10 @@ fn process_path_change(
             let _ = context.write_tx.send(WriteRequest::InsertTokenLogs(logs));
         }
         dispatch_behavior_events(agent.as_ref(), &batch, &context.behavior);
-        file_offsets.insert(path_str.to_string(), new_size);
+        file_offsets.insert(path_str.to_string(), read_offset);
         let _ = context.write_tx.send(WriteRequest::UpdateOffset {
             file_path: path_str.to_string(),
-            offset: new_size,
+            offset: read_offset,
         });
         return;
     }
@@ -311,6 +312,10 @@ fn process_path_change(
                 return;
             }
         };
+    let read_offset = match &batch {
+        AgentDataBatch::JsonlIncrement { next_offset, .. } => *next_offset,
+        _ => return,
+    };
     let extraction = agent.extract_tokens(&batch);
     if let Some(final_model) = extraction.final_model {
         codex_model_cache.insert(path_str.to_string(), final_model);
@@ -337,23 +342,23 @@ fn process_path_change(
         let _ = context.write_tx.send(WriteRequest::InsertTokenLogs(logs));
     }
     dispatch_behavior_events(agent.as_ref(), &batch, &context.behavior);
-    file_offsets.insert(path_str.to_string(), new_size);
+    file_offsets.insert(path_str.to_string(), read_offset);
     let _ = context.write_tx.send(WriteRequest::UpdateOffset {
         file_path: path_str.to_string(),
-        offset: new_size,
+        offset: read_offset,
     });
 }
 
-fn build_changed_batch(
+pub(super) fn build_changed_batch(
     path: &std::path::Path,
     path_str: &str,
     prev_offset: u64,
     agent_name: &str,
     codex_model_cache: &mut HashMap<String, String>,
 ) -> std::io::Result<AgentDataBatch> {
-    let next_offset = std::fs::metadata(path)?.len();
     if agent_name != "codex" {
-        let content = read_from_offset(path, prev_offset)?;
+        let content = read_complete_jsonl(path, prev_offset)?;
+        let next_offset = prev_offset + content.len() as u64;
         return Ok(AgentDataBatch::JsonlIncrement {
             agent_name: agent_name.to_string(),
             source_key: path_str.to_string(),
@@ -367,13 +372,14 @@ fn build_changed_batch(
         });
     }
 
-    let behavior_content = read_from_offset(path, prev_offset)?;
+    let behavior_content = read_complete_jsonl(path, prev_offset)?;
+    let next_offset = prev_offset + behavior_content.len() as u64;
     let behavior_context =
         read_prefix_lines(path, crate::behavior::codex::SESSION_META_SCAN_LINES)?;
     let (token_context, initial_model) = match codex_model_cache.get(path_str) {
         Some(model) => (None, Some(model.clone())),
         None => (
-            Some(std::fs::read_to_string(path)?),
+            Some(read_complete_jsonl(path, 0)?),
             Some(crate::adapters::codex::DEFAULT_CODEX_MODEL.to_string()),
         ),
     };
@@ -423,6 +429,24 @@ fn dispatch_behavior_events_if_enabled(
     for event in agent.extract_behavior(batch) {
         dispatcher.handle_event(event);
     }
+}
+
+/**
+ * 读取完整 JSONL 行，保留未写完的尾行供下次读取，返回可安全推进断点的内容
+ */
+pub(super) fn read_complete_jsonl(path: &std::path::Path, offset: u64) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    let end = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |index| index + 1);
+    bytes.truncate(end);
+    String::from_utf8(bytes)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 /// 从指定 offset 读取文件内容

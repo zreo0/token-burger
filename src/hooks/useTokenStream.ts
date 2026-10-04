@@ -10,10 +10,13 @@ export function useTokenStream() {
     const [range, setRange] = useState<TimeRange>('today');
     const requestId = useRef(0);
 
-    const refresh = useCallback(async () => {
+    /**
+     * 查询当前范围；后台更新保留已有内容，避免历史补录期间数字反复变成占位
+     */
+    const fetchSummary = useCallback(async (background: boolean) => {
         const id = ++requestId.current;
         try {
-            setLoading(true);
+            if (!background) setLoading(true);
             const result = await invoke<TokenSummary>('get_token_summary', { range });
             if (id !== requestId.current) return;
             setSummary(result);
@@ -24,6 +27,8 @@ export function useTokenStream() {
             if (id === requestId.current) setLoading(false);
         }
     }, [range]);
+
+    const refresh = useCallback(() => fetchSummary(false), [fetchSummary]);
 
     useEffect(() => {
         void refresh();
@@ -41,14 +46,14 @@ export function useTokenStream() {
                 setError(null);
             } else {
                 // 7d/30d 视图重新查询（当天新增 token 影响该范围总量）
-                refresh();
+                void fetchSummary(true);
             }
         });
 
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [range, refresh]);
+    }, [range, fetchSummary]);
 
     return { summary, loading, error, refresh, range, setRange };
 }

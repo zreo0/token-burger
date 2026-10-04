@@ -155,6 +155,185 @@ pub fn run_sqlite_polling(config: SqlitePollingConfig) {
     }
 }
 
+/** 启动期 SQLite 调度状态，历史与今日窗口由同一所有者交替推进 */
+pub(super) struct StartupSqlite {
+    conn: rusqlite::Connection,
+    path: PathBuf,
+    source_key: String,
+    history: std::collections::VecDeque<ExternalSqliteCursor>,
+    recent: Vec<ExternalSqliteCursor>,
+    reconcile_index: usize,
+    today: i64,
+    history_failed: bool,
+    local: PathBuf,
+}
+
+impl StartupSqlite {
+    /**
+     * 创建历史与今日读取窗口，历史 cursor 是唯一可持久化的断点
+     */
+    pub(super) fn new(
+        agent: &dyn AgentPipeline,
+        path: &Path,
+        local: &Path,
+        tx: &Sender<WriteRequest>,
+        since: Option<u64>,
+        keep_days: u32,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let conn = open_external_readonly(path)?;
+        let source_key = super::sqlite_offset_key(path);
+        let history = load_or_bootstrap_cursors(
+            agent,
+            &conn,
+            local,
+            &source_key,
+            since,
+            sqlite_initial_cursor_time(keep_days),
+            tx,
+        )?;
+        let today = chrono::Local::now()
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .earliest()
+            .unwrap_or_else(chrono::Local::now)
+            .timestamp_millis();
+        let recent = Vec::new();
+        Ok(Self {
+            conn,
+            path: path.to_path_buf(),
+            source_key,
+            history: history.into(),
+            recent,
+            reconcile_index: 0,
+            today,
+            history_failed: false,
+            local: local.to_path_buf(),
+        })
+    }
+
+    /** 返回仍需补录的会话数 */
+    pub(super) fn remaining(&self) -> usize {
+        self.history.len()
+    }
+
+    /**
+     * 优先采集今日新增与更新记录，返回是否仍有整页待读，不持久化实时窗口 cursor
+     */
+    pub(super) fn poll_recent(
+        &mut self,
+        agent: &dyn AgentPipeline,
+        tx: &Sender<WriteRequest>,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let known = self
+            .recent
+            .iter()
+            .map(|cursor| cursor.session_id.clone())
+            .collect::<BTreeSet<_>>();
+        for id in agent.list_recent_sqlite_session_ids(&self.conn, self.today)? {
+            if !known.contains(&id) {
+                self.recent.push(ExternalSqliteCursor {
+                    source_key: self.source_key.clone(),
+                    session_id: id,
+                    created_time: self.today,
+                    created_id: String::new(),
+                    updated_time: self.today,
+                });
+            }
+        }
+        let mut more = false;
+        for cursor in &mut self.recent {
+            more |= process_created_rows_with_persistence(
+                agent,
+                &self.conn,
+                &self.path,
+                &self.source_key,
+                tx,
+                std::slice::from_mut(cursor),
+                None,
+                false,
+            )? >= CREATED_BATCH_LIMIT;
+        }
+        process_updated_rows_with_persistence(
+            agent,
+            &self.conn,
+            &self.path,
+            &self.source_key,
+            tx,
+            &mut self.recent,
+            &mut self.reconcile_index,
+            false,
+        )?;
+        Ok(more)
+    }
+
+    /**
+     * 补录一个会话的一页历史并确认入库，返回该会话是否已追平
+     */
+    pub(super) fn history_step(
+        &mut self,
+        agent: &dyn AgentPipeline,
+        tx: &Sender<WriteRequest>,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let Some(mut cursor) = self.history.pop_front() else {
+            return Ok(false);
+        };
+        let count = match process_created_rows(
+            agent,
+            &self.conn,
+            &self.path,
+            &self.source_key,
+            tx,
+            std::slice::from_mut(&mut cursor),
+            None,
+        ) {
+            Ok(count) => count,
+            Err(error) => {
+                self.history_failed = true;
+                return Err(error);
+            }
+        };
+        if count >= CREATED_BATCH_LIMIT {
+            self.history.push_back(cursor);
+            Ok(false)
+        } else {
+            Ok(true)
+        }
+    }
+    /**
+     * 历史完整覆盖后才合并今日 cursor，避免正常监听再次回放启动期事件
+     */
+    pub(super) fn finish(
+        &self,
+        tx: &Sender<WriteRequest>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if self.history_failed || !self.history.is_empty() {
+            return Ok(());
+        }
+        let mut persisted = load_local_cursors(&self.local, &self.source_key)?;
+        for cursor in &mut persisted {
+            if let Some(recent) = self
+                .recent
+                .iter()
+                .find(|recent| recent.session_id == cursor.session_id)
+            {
+                if (recent.created_time, &recent.created_id)
+                    > (cursor.created_time, &cursor.created_id)
+                {
+                    cursor.created_time = recent.created_time;
+                    cursor.created_id.clone_from(&recent.created_id);
+                }
+                cursor.updated_time = cursor.updated_time.max(recent.updated_time);
+            }
+        }
+        if !write_sqlite_cursors(tx, persisted) {
+            return Err("保存启动期 SQLite 接续位置失败".into());
+        }
+        Ok(())
+    }
+}
+
 fn open_external_readonly(db_path: &Path) -> Result<rusqlite::Connection, rusqlite::Error> {
     let conn = rusqlite::Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     conn.busy_timeout(std::time::Duration::from_millis(5000))?;
@@ -162,6 +341,7 @@ fn open_external_readonly(db_path: &Path) -> Result<rusqlite::Connection, rusqli
 }
 
 /// 冷启动处理外部 SQLite source，并通过 per-session cursor 完成历史追赶。
+#[cfg(test)]
 pub(crate) fn cold_start_sqlite_source(
     agent: &dyn AgentPipeline,
     db_path: &Path,
@@ -338,6 +518,32 @@ fn process_created_rows(
     cursors: &mut [ExternalSqliteCursor],
     behavior_runtime: Option<&BehaviorRuntime>,
 ) -> Result<usize, Box<dyn std::error::Error>> {
+    process_created_rows_with_persistence(
+        agent,
+        conn,
+        db_path,
+        source_key,
+        write_tx,
+        cursors,
+        behavior_runtime,
+        true,
+    )
+}
+
+/**
+ * 按批次解析新消息；启动期实时窗口只保存 token，不越过历史 cursor
+ */
+#[allow(clippy::too_many_arguments)]
+fn process_created_rows_with_persistence(
+    agent: &dyn AgentPipeline,
+    conn: &rusqlite::Connection,
+    db_path: &Path,
+    source_key: &str,
+    write_tx: &Sender<WriteRequest>,
+    cursors: &mut [ExternalSqliteCursor],
+    behavior_runtime: Option<&BehaviorRuntime>,
+    persist: bool,
+) -> Result<usize, Box<dyn std::error::Error>> {
     let mut processed = 0usize;
 
     for cursor in cursors {
@@ -372,7 +578,15 @@ fn process_created_rows(
             _ => 0,
         };
 
-        if !insert_logs_and_update_sqlite_cursors(write_tx, logs, vec![next_cursor.clone()]) {
+        if !insert_logs_and_update_sqlite_cursors(
+            write_tx,
+            logs,
+            if persist {
+                vec![next_cursor.clone()]
+            } else {
+                Vec::new()
+            },
+        ) {
             return Err("写入 created cursor 处理结果失败".into());
         }
 
@@ -399,6 +613,32 @@ fn process_updated_rows(
     write_tx: &Sender<WriteRequest>,
     cursors: &mut [ExternalSqliteCursor],
     reconcile_index: &mut usize,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    process_updated_rows_with_persistence(
+        agent,
+        conn,
+        db_path,
+        source_key,
+        write_tx,
+        cursors,
+        reconcile_index,
+        true,
+    )
+}
+
+/**
+ * 校准已有消息的用量变动，启动实时窗口不得覆盖历史补录进度
+ */
+#[allow(clippy::too_many_arguments)]
+fn process_updated_rows_with_persistence(
+    agent: &dyn AgentPipeline,
+    conn: &rusqlite::Connection,
+    db_path: &Path,
+    source_key: &str,
+    write_tx: &Sender<WriteRequest>,
+    cursors: &mut [ExternalSqliteCursor],
+    reconcile_index: &mut usize,
+    persist: bool,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     if cursors.is_empty() {
         return Ok(0);
@@ -447,7 +687,15 @@ fn process_updated_rows(
             next_watermark: row_batch.high_watermark,
         };
         let logs = agent.extract_tokens(&batch).logs;
-        if !insert_logs_and_update_sqlite_cursors(write_tx, logs, vec![next_cursor.clone()]) {
+        if !insert_logs_and_update_sqlite_cursors(
+            write_tx,
+            logs,
+            if persist {
+                vec![next_cursor.clone()]
+            } else {
+                Vec::new()
+            },
+        ) {
             return Err("写入 updated cursor 校准结果失败".into());
         }
 
@@ -689,6 +937,106 @@ mod tests {
     }
 
     impl BehaviorExtractor for EmptyUpdatedAgent {}
+
+    /** 验证活跃会话筛选同时覆盖新消息、旧消息更新和无会话消息 */
+    #[test]
+    fn recent_session_discovery_covers_both_sqlite_adapters() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE message (session_id TEXT, time_created INTEGER, time_updated INTEGER);
+            INSERT INTO message VALUES ('new', 110, 110), ('updated', 10, 120), ('inactive', 10, 10), (NULL, 130, 130);").unwrap();
+        let agents: Vec<Box<dyn AgentPipeline>> = vec![Box::new(crate::adapters::opencode::OpenCodeAdapter), Box::new(crate::adapters::mimocode::MiMoCodeAdapter)];
+        for agent in agents {
+            let ids = agent.list_recent_sqlite_session_ids(&conn, 100).unwrap();
+            assert_eq!(ids, vec![crate::adapters::SQLITE_NULL_SESSION_ID.to_string(), "new".to_string(), "updated".to_string()]);
+        }
+    }
+
+    /**
+     * 验证今日用量先可见、消息更新不丢失，历史断点不会被实时窗口提前推进
+     */
+    #[test]
+    fn startup_recent_usage_does_not_skip_history_or_duplicate_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("local.db");
+        let external = dir.path().join("external.db");
+        let local_conn = crate::db::init_db(&local).unwrap();
+        let external_conn = rusqlite::Connection::open(&external).unwrap();
+        external_conn.execute_batch("CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, data TEXT, time_created INTEGER, time_updated INTEGER);").unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let old = now - 2 * 86_400_000;
+        for (id, count, time) in [("old", 100, old), ("today", 10, now)] {
+            let data = format!(r#"{{"role":"assistant","tokens":{{"input":{count}}}}}"#);
+            external_conn
+                .execute(
+                    "INSERT INTO message VALUES (?1, 'session', ?2, ?3, ?3)",
+                    rusqlite::params![id, data, time],
+                )
+                .unwrap();
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let writer_path = local.clone();
+        let writer = std::thread::spawn(move || {
+            let conn = crate::db::init_db(&writer_path).unwrap();
+            while let Ok(request) = rx.recv() {
+                let WriteRequest::InsertTokenLogsAndUpdateSqliteCursors {
+                    logs,
+                    cursors,
+                    result_tx,
+                } = request
+                else {
+                    panic!("unexpected request");
+                };
+                let result = queries::batch_insert_token_logs_and_update_sqlite_cursors(
+                    &conn, &logs, &cursors,
+                )
+                .map_err(|error| error.to_string());
+                result_tx.send(result).unwrap();
+            }
+        });
+        let agent = crate::adapters::opencode::OpenCodeAdapter;
+        let mut startup = StartupSqlite::new(&agent, &external, &local, &tx, None, 90).unwrap();
+        startup.poll_recent(&agent, &tx).unwrap();
+        assert_eq!(
+            queries::get_token_summary(&local_conn, "today")
+                .unwrap()
+                .total,
+            10
+        );
+        let persisted = load_local_cursors(&local, &startup.source_key).unwrap();
+        assert!(persisted[0].created_time < old);
+        external_conn
+            .execute(
+                "UPDATE message SET data = ?1, time_updated = ?2 WHERE id = 'today'",
+                rusqlite::params![r#"{"role":"assistant","tokens":{"input":20}}"#, now + 1],
+            )
+            .unwrap();
+        startup.poll_recent(&agent, &tx).unwrap();
+        assert_eq!(
+            queries::get_token_summary(&local_conn, "today")
+                .unwrap()
+                .total,
+            20
+        );
+        while startup.remaining() > 0 {
+            startup.history_step(&agent, &tx).unwrap();
+        }
+        startup.finish(&tx).unwrap();
+        assert_eq!(
+            queries::get_token_summary(&local_conn, "7d").unwrap().total,
+            120
+        );
+        let mut restarted = StartupSqlite::new(&agent, &external, &local, &tx, None, 90).unwrap();
+        restarted.poll_recent(&agent, &tx).unwrap();
+        while restarted.remaining() > 0 {
+            restarted.history_step(&agent, &tx).unwrap();
+        }
+        assert_eq!(
+            queries::get_token_summary(&local_conn, "7d").unwrap().total,
+            120
+        );
+        drop(tx);
+        writer.join().unwrap();
+    }
 
     #[test]
     fn bootstrap_cursors_use_old_watermark_without_reading_rows() {

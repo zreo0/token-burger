@@ -1141,6 +1141,31 @@ mod tests {
         );
     }
 
+    /**
+     * 验证文件断点写入失败时整批 token 回滚，不产生半完成状态
+     */
+    #[test]
+    fn file_import_rolls_back_when_offset_write_fails() {
+        let conn = setup_db();
+        update_offset(&conn, "session.jsonl", 3).unwrap();
+        conn.execute_batch("CREATE TRIGGER reject_offset BEFORE INSERT ON file_offsets BEGIN SELECT RAISE(ABORT, 'disk full'); END;").unwrap();
+        let logs = vec![make_log(
+            "codex",
+            "gpt-5",
+            TokenType::Input,
+            100,
+            "atomic-failure",
+        )];
+        assert!(
+            batch_insert_token_logs_and_update_offset(&conn, &logs, "session.jsonl", 10).is_err()
+        );
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM token_logs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(get_offset(&conn, "session.jsonl").unwrap(), Some(3));
+    }
+
     #[test]
     fn test_clear_data() {
         let conn = setup_db();

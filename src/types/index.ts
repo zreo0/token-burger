@@ -116,6 +116,11 @@ export interface PricingRefreshResult {
 
 // 冷启动进度
 export interface ColdStartProgress {
+    live: boolean;
+    revision: number;
+    phase: 'recent' | 'history' | 'writing' | 'complete';
+    files_checked: number;
+    errors: number;
     agent: string;
     done: boolean;
     total: number;

@@ -300,6 +300,8 @@ pub fn run() {
             // 注册共享状态
             let db_path_str = db_path.to_string_lossy().to_string();
             let cold_start_complete = Arc::new(AtomicBool::new(false));
+            let cold_start_progress =
+                Arc::new(std::sync::Mutex::new(types::ColdStartProgress::default()));
             let behavior_tips_enabled = Arc::new(AtomicBool::new(behavior_tips_enabled));
             let behavior = Arc::new(behavior::dispatcher::BehaviorDispatcher::new(
                 app.handle().clone(),
@@ -330,6 +332,7 @@ pub fn run() {
                 watcher_config,
                 db_path.clone(),
                 cold_start_complete.clone(),
+                cold_start_progress.clone(),
                 behavior_runtime,
             );
 
@@ -342,6 +345,7 @@ pub fn run() {
                 account_usage: account_usage_manager,
                 account_usage_refresher: std::sync::Mutex::new(None),
                 cold_start_complete: cold_start_complete.clone(),
+                cold_start_progress,
                 behavior: behavior.clone(),
                 behavior_tips_enabled: behavior_tips_enabled.clone(),
             });
@@ -389,9 +393,6 @@ pub fn run() {
                         if let Some(state) = app.try_state::<commands::AppState>() {
                             state.behavior.cache_tray_rect(&rect);
                         }
-                        if !commands::is_cold_start_complete(app) {
-                            return;
-                        }
                         toggle_popup_window(app, &rect);
                     }
                 })
@@ -419,6 +420,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_token_summary,
+            commands::get_cold_start_progress,
             commands::get_token_trend,
             open_settings,
             commands::get_agent_list,

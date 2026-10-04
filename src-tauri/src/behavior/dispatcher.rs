@@ -217,14 +217,14 @@ impl BehaviorDispatcher {
         } else {
             None
         };
-        let current = {
+        {
             let Ok(mut queue) = self.queue.lock() else {
                 return;
             };
-            queue.handle_event(event)
+            queue.handle_event(event);
         };
 
-        self.sync_window(current);
+        self.sync_window();
         if let Some(key) = pending_completion_key {
             self.start_completion_confirm_timer(key);
         }
@@ -232,26 +232,26 @@ impl BehaviorDispatcher {
 
     /// 关闭当前提示
     pub fn close_current(&self) {
-        let current = {
+        {
             let Ok(mut queue) = self.queue.lock() else {
                 return;
             };
-            queue.close_current()
+            queue.close_current();
         };
 
-        self.sync_window(current);
+        self.sync_window();
     }
 
     /// 确认待展示的完成提醒
     pub fn confirm_pending_completion(&self, key: &str) {
-        let current = {
+        {
             let Ok(mut queue) = self.queue.lock() else {
                 return;
             };
-            queue.confirm_pending_completion(key)
+            queue.confirm_pending_completion(key);
         };
 
-        self.sync_window(current);
+        self.sync_window();
     }
 
     /// 获取当前提示快照
@@ -271,28 +271,39 @@ impl BehaviorDispatcher {
     }
 
     fn close_key(&self, key: &str) {
-        let current = {
+        {
             let Ok(mut queue) = self.queue.lock() else {
                 return;
             };
-            queue.close_key(key)
+            queue.close_key(key);
         };
 
-        self.sync_window(current);
+        self.sync_window();
     }
 
-    fn sync_window(&self, current: Option<BehaviorTip>) {
-        match current {
-            Some(tip) => {
-                let rect = self.current_tray_rect();
-                if tip_window::show_tip_window(&self.app, rect, &tip).is_ok() {
-                    self.start_auto_hide_timer(&tip);
+    /**
+     * 将提示窗口与托盘位置访问调度到主线程，无返回值
+     * 执行时读取最新队列，避免后台事件积压后展示过期提醒
+     */
+    fn sync_window(&self) {
+        let app = self.app.clone();
+        let _ = self.app.run_on_main_thread(move || {
+            let Some(state) = app.try_state::<crate::commands::AppState>() else {
+                return;
+            };
+            let dispatcher = &state.behavior;
+            match dispatcher.current_tip() {
+                Some(tip) => {
+                    let rect = dispatcher.current_tray_rect();
+                    if tip_window::show_tip_window(&app, rect, &tip).is_ok() {
+                        dispatcher.start_auto_hide_timer(&tip);
+                    }
+                }
+                None => {
+                    let _ = tip_window::hide_tip_window(&app);
                 }
             }
-            None => {
-                let _ = tip_window::hide_tip_window(&self.app);
-            }
-        }
+        });
     }
 
     fn current_tray_rect(&self) -> Option<tip_window::TrayRect> {

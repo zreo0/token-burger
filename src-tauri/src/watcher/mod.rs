@@ -2,12 +2,13 @@ pub mod notify_strategy;
 pub mod offset;
 pub mod polling_strategy;
 pub mod sqlite_strategy;
+mod startup;
 
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::thread;
 use std::time::Duration;
@@ -25,6 +26,34 @@ fn sqlite_offset_key(db_path: &std::path::Path) -> String {
 
 fn mark_cold_start_complete(cold_start_complete: &Arc<AtomicBool>) {
     cold_start_complete.store(true, Ordering::Release);
+}
+
+/**
+ * 更新共享进度并发布事件，参数为状态变更函数，无返回值
+ */
+fn update_cold_start_progress(
+    app: &AppHandle,
+    progress: &Mutex<ColdStartProgress>,
+    update: impl FnOnce(&mut ColdStartProgress),
+) {
+    let snapshot = {
+        let mut state = progress.lock().unwrap();
+        update(&mut state);
+        state.revision += 1;
+        state.clone()
+    };
+    let _ = app.emit("cold-start-progress", snapshot);
+}
+
+/**
+ * 等待写通道中已有请求处理完毕，返回持久化结果
+ */
+fn flush_writes(write_tx: &Sender<WriteRequest>) -> Result<(), String> {
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    write_tx
+        .send(WriteRequest::Flush(result_tx))
+        .map_err(|error| error.to_string())?;
+    result_rx.recv().map_err(|error| error.to_string())?
 }
 
 /// Watcher 配置
@@ -56,6 +85,7 @@ pub struct WatcherEngine {
 
 impl WatcherEngine {
     /// 启动 Watcher 引擎（冷启动 + 正常监听）
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         agents: Vec<Box<dyn AgentPipeline>>,
         write_tx: Sender<WriteRequest>,
@@ -63,6 +93,7 @@ impl WatcherEngine {
         config: WatcherConfig,
         db_path: PathBuf,
         cold_start_complete: Arc<AtomicBool>,
+        progress: Arc<Mutex<ColdStartProgress>>,
         behavior: Option<BehaviorRuntime>,
     ) -> Self {
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -71,73 +102,54 @@ impl WatcherEngine {
         let handle = thread::spawn(move || {
             // 阶段一：冷启动——解析历史数据
             cold_start_complete.store(false, Ordering::Release);
-            let mut known_offsets = offset::load_offsets_from_db(&db_path);
-            let total = agents.len() as u32;
-            log::info!(target: "token_burger::watcher", "冷启动开始: {} 个 agent source, 已知 {} 个文件 offset", total, known_offsets.len());
-            for (idx, agent) in agents.iter().enumerate() {
+            update_cold_start_progress(&app_handle, &progress, |state| {
+                let revision = state.revision;
+                *state = ColdStartProgress {
+                    revision,
+                    phase: "recent".to_string(),
+                    ..Default::default()
+                };
+            });
+            let known_offsets = offset::load_offsets_from_db(&db_path);
+            let mut scheduler = startup::StartupScheduler::new(
+                &agents,
+                &write_tx,
+                &db_path,
+                &config,
+                known_offsets,
+            );
+            log::info!(target: "token_burger::watcher", "启动后台同步: {} 项历史任务", scheduler.progress.total);
+            let mut last_report = std::time::Instant::now() - Duration::from_secs(1);
+            loop {
                 if flag.load(Ordering::Relaxed) {
                     return;
                 }
-                let updated_offsets = cold_start_adapter(
-                    agent.as_ref(),
-                    &write_tx,
-                    config.keep_days,
-                    &known_offsets,
-                    &db_path,
-                );
-                for (key, offset) in updated_offsets {
-                    known_offsets.insert(key, offset);
+                let pending = scheduler.step();
+                if !pending || last_report.elapsed() >= Duration::from_millis(250) {
+                    update_cold_start_progress(&app_handle, &progress, |state| {
+                        let revision = state.revision;
+                        *state = scheduler.progress.clone();
+                        state.revision = revision;
+                    });
+                    last_report = std::time::Instant::now();
                 }
-
-                let _ = app_handle.emit(
-                    "cold-start-progress",
-                    ColdStartProgress {
-                        agent: agent.agent_name().to_string(),
-                        done: true,
-                        total,
-                        completed: (idx + 1) as u32,
-                    },
-                );
+                if !pending {
+                    break;
+                }
             }
-
+            let known_offsets = scheduler.finish();
             mark_cold_start_complete(&cold_start_complete);
-            match crate::db::open_readonly(&db_path) {
-                Ok(conn) => crate::db::query_and_emit_today_summary(&app_handle, &conn),
-                Err(e) => log::error!("冷启动完成后刷新汇总失败: {}", e),
+            update_cold_start_progress(&app_handle, &progress, |state| {
+                state.phase = "complete".to_string();
+                state.done = true;
+                state.errors = scheduler.progress.errors;
+            });
+            if let Ok(conn) = crate::db::open_readonly(&db_path) {
+                crate::db::query_and_emit_today_summary(&app_handle, &conn);
             }
-            log::info!(target: "token_burger::watcher", "冷启动完成");
+            log::info!(target: "token_burger::watcher", "冷启动完成，转入持续监听");
 
             // 阶段二：正常监听模式
-            start_watchers(
-                &agents,
-                &write_tx,
-                &flag,
-                &config,
-                &db_path,
-                &known_offsets,
-                behavior.as_ref(),
-            );
-        });
-
-        WatcherEngine {
-            stop_flag,
-            handle: Some(handle),
-        }
-    }
-
-    /// 仅启动监听（跳过冷启动，用于设置变更后重启）
-    pub fn start_monitoring(
-        agents: Vec<Box<dyn AgentPipeline>>,
-        write_tx: Sender<WriteRequest>,
-        config: WatcherConfig,
-        db_path: PathBuf,
-        behavior: Option<BehaviorRuntime>,
-    ) -> Self {
-        let stop_flag = Arc::new(AtomicBool::new(false));
-        let flag = stop_flag.clone();
-
-        let handle = thread::spawn(move || {
-            let known_offsets = offset::load_offsets_from_db(&db_path);
             start_watchers(
                 &agents,
                 &write_tx,
@@ -164,46 +176,37 @@ impl WatcherEngine {
     }
 }
 
-pub fn catch_up_adapters(
-    agents: Vec<Box<dyn AgentPipeline>>,
-    write_tx: Sender<WriteRequest>,
-    keep_days: u32,
-    db_path: PathBuf,
-) {
-    thread::spawn(move || {
-        let mut known_offsets = offset::load_offsets_from_db(&db_path);
-        for agent in agents {
-            let updated_offsets = cold_start_adapter(
-                agent.as_ref(),
-                &write_tx,
-                keep_days,
-                &known_offsets,
-                &db_path,
-            );
-            for (key, offset) in updated_offsets {
-                known_offsets.insert(key, offset);
-            }
-        }
-    });
-}
-
-/// 冷启动：扫描单个 Adapter 的历史文件
+/// 测试入口：扫描单个 Adapter 的历史文件
+#[cfg(test)]
 fn cold_start_adapter(
     agent: &dyn AgentPipeline,
     write_tx: &Sender<WriteRequest>,
     keep_days: u32,
     known_offsets: &std::collections::HashMap<String, u64>,
     local_db_path: &std::path::Path,
+    report: &mut dyn FnMut(bool),
 ) -> Vec<(String, u64)> {
     let agent_name = agent.agent_name();
 
     match agent.data_source() {
-        DataSource::Jsonl { paths } => {
-            cold_start_file_source(agent, write_tx, keep_days, known_offsets, paths, true)
-        }
-        DataSource::Json { paths } => {
-            cold_start_file_source(agent, write_tx, keep_days, known_offsets, paths, false)
-        }
+        DataSource::Jsonl { .. } => cold_start_file_source(
+            agent,
+            write_tx,
+            keep_days,
+            known_offsets,
+            startup::discover_files(agent),
+            true,
+            report,
+        ),
+        DataSource::Json { .. } => cold_start_file_source(
+            agent,
+            write_tx,
+            keep_days,
+            known_offsets,
+            startup::discover_files(agent),
+            false,
+            report,
+        ),
         DataSource::Sqlite { db_path } => {
             if db_path.exists() {
                 let offset_key = sqlite_offset_key(&db_path);
@@ -226,6 +229,7 @@ fn cold_start_adapter(
                         log::info!("[冷启动] {} 完成: {} 条 SQLite row", agent_name, count);
                     }
                     Err(e) => {
+                        report(true);
                         log::warn!("[冷启动] {}: SQLite 查询失败: {}", agent_name, e);
                     }
                 }
@@ -245,150 +249,130 @@ fn cold_start_file_source(
     known_offsets: &std::collections::HashMap<String, u64>,
     paths: Vec<PathBuf>,
     is_jsonl: bool,
+    report: &mut dyn FnMut(bool),
 ) -> Vec<(String, u64)> {
     let mut updated_offsets = Vec::new();
     let cutoff = chrono::Local::now() - chrono::Duration::days(keep_days as i64);
     let cutoff_ts = cutoff.timestamp();
     let agent_name = agent.agent_name();
-    let mut total_files = 0u32;
-    let mut total_records = 0u32;
-    let mut skipped_old = 0u32;
-    let mut skipped_known = 0u32;
-    let mut seen_paths = std::collections::HashSet::new();
-
-    for base_path in &paths {
-        for pattern in &agent.log_paths() {
-            let entries = match glob::glob(pattern) {
-                Ok(e) => e,
-                Err(e) => {
-                    log::warn!("[冷启动] {}: glob 模式错误 {}: {}", agent_name, pattern, e);
-                    continue;
-                }
-            };
-            for entry in entries.flatten() {
-                let canonical = entry.canonicalize().unwrap_or_else(|_| entry.clone());
-                if !seen_paths.insert(canonical) {
-                    continue;
-                }
-                let path_str = entry.to_string_lossy().to_string();
-                let reindex_claude = agent_name == "claude-code"
-                    && !known_offsets
-                        .contains_key(&crate::db::queries::claude_parser_marker(&path_str));
-                let repair_existing_claude =
-                    reindex_claude && known_offsets.contains_key(&path_str);
-                // mtime 过滤
-                if let Ok(meta) = std::fs::metadata(&entry) {
-                    if let Ok(mtime) = meta.modified() {
-                        let mtime_ts = mtime
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as i64;
-                        if !repair_existing_claude && mtime_ts < cutoff_ts {
-                            skipped_old += 1;
-                            continue;
-                        }
-                    }
-                    // offset 过滤：文件大小未变则跳过
-                    let path_str = entry.to_string_lossy().to_string();
-                    if let Some(&prev_offset) = known_offsets.get(&path_str) {
-                        if !reindex_claude && meta.len() <= prev_offset {
-                            skipped_known += 1;
-                            continue;
-                        }
-                    }
-                }
-                if let Ok(content) = std::fs::read_to_string(&entry) {
-                    let path_str = entry.to_string_lossy().to_string();
-                    let mtime = std::fs::metadata(&entry)
-                        .and_then(|meta| meta.modified())
-                        .ok()
-                        .and_then(|mtime| {
-                            mtime
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .ok()
-                                .map(|duration| duration.as_secs())
-                        })
-                        .unwrap_or_default();
-                    let batch = if is_jsonl {
-                        AgentDataBatch::JsonlIncrement {
-                            agent_name: agent_name.to_string(),
-                            source_key: path_str.clone(),
-                            path: entry.clone(),
-                            content,
-                            behavior_context: None,
-                            token_context: None,
-                            initial_model: None,
-                            previous_offset: 0,
-                            next_offset: std::fs::metadata(&entry)
-                                .map(|meta| meta.len())
-                                .unwrap_or_default(),
-                        }
-                    } else {
-                        AgentDataBatch::JsonDocument {
-                            agent_name: agent_name.to_string(),
-                            source_key: path_str.clone(),
-                            path: entry.clone(),
-                            content,
-                            mtime,
-                        }
-                    };
-                    let logs = agent.extract_tokens(&batch).logs;
-                    let count = logs.len() as u32;
-                    total_files += 1;
-                    total_records += count;
-                    if reindex_claude {
-                        // 使用已读取内容的长度，避免读完后文件追加导致 offset 越过未解析内容
-                        let next_offset =
-                            batch.token_content().map(str::len).unwrap_or_default() as u64;
-                        let (result_tx, result_rx) = std::sync::mpsc::channel();
-                        if write_tx
-                            .send(WriteRequest::ReindexClaudeFile {
-                                logs,
-                                file_path: path_str.clone(),
-                                offset: next_offset,
-                                result_tx,
-                            })
-                            .is_ok()
-                        {
-                            match result_rx.recv() {
-                                Ok(Ok(())) => {
-                                    updated_offsets.push((
-                                        crate::db::queries::claude_parser_marker(&path_str),
-                                        0,
-                                    ));
-                                    updated_offsets.push((path_str, next_offset));
-                                }
-                                result => log::warn!("Claude 日志重算未完成: {:?}", result),
-                            }
-                        }
-                        continue;
-                    }
-                    if !logs.is_empty() {
-                        let _ = write_tx.send(WriteRequest::InsertTokenLogs(logs));
-                    }
-
-                    // 冷启动完成后立即落盘 offset，避免下次启动重复扫描。
-                    if let Ok(meta) = std::fs::metadata(&entry) {
-                        let offset = meta.len();
+    for entry in paths {
+        report(false);
+        let path_str = entry.to_string_lossy().to_string();
+        let reindex_claude = agent_name == "claude-code"
+            && !known_offsets.contains_key(&crate::db::queries::claude_parser_marker(&path_str));
+        let repair_existing_claude = reindex_claude && known_offsets.contains_key(&path_str);
+        // mtime 过滤
+        if let Ok(meta) = std::fs::metadata(&entry) {
+            if let Ok(mtime) = meta.modified() {
+                let mtime_ts = mtime
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                if !repair_existing_claude && mtime_ts < cutoff_ts {
+                    // 过期历史不参与导入，也不能在监听启动时回放为新的运行提醒
+                    updated_offsets.push((path_str.clone(), meta.len()));
+                    if known_offsets.get(&path_str).copied() != Some(meta.len()) {
                         let _ = write_tx.send(WriteRequest::UpdateOffset {
                             file_path: path_str.clone(),
-                            offset,
+                            offset: meta.len(),
                         });
-                        updated_offsets.push((path_str, offset));
                     }
+                    continue;
+                }
+            }
+            // offset 过滤：文件大小未变则跳过
+            let path_str = entry.to_string_lossy().to_string();
+            if let Some(&prev_offset) = known_offsets.get(&path_str) {
+                if !reindex_claude && meta.len() == prev_offset {
+                    continue;
                 }
             }
         }
-        let _ = base_path;
+        let content = match if is_jsonl {
+            notify_strategy::read_complete_jsonl(&entry, 0)
+        } else {
+            std::fs::read_to_string(&entry)
+        } {
+            Ok(content) => content,
+            Err(error) => {
+                report(true);
+                log::warn!(
+                    "[冷启动] {}: 读取 {} 失败: {}",
+                    agent_name,
+                    entry.display(),
+                    error
+                );
+                continue;
+            }
+        };
+        {
+            let next_offset = content.len() as u64;
+            let path_str = entry.to_string_lossy().to_string();
+            let mtime = std::fs::metadata(&entry)
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|mtime| {
+                    mtime
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .ok()
+                        .map(|duration| duration.as_secs())
+                })
+                .unwrap_or_default();
+            let batch = if is_jsonl {
+                AgentDataBatch::JsonlIncrement {
+                    agent_name: agent_name.to_string(),
+                    source_key: path_str.clone(),
+                    path: entry.clone(),
+                    content,
+                    behavior_context: None,
+                    token_context: None,
+                    initial_model: None,
+                    previous_offset: 0,
+                    next_offset,
+                }
+            } else {
+                AgentDataBatch::JsonDocument {
+                    agent_name: agent_name.to_string(),
+                    source_key: path_str.clone(),
+                    path: entry.clone(),
+                    content,
+                    mtime,
+                }
+            };
+            let logs = agent.extract_tokens(&batch).logs;
+            if reindex_claude {
+                // 使用已读取内容的长度，避免读完后文件追加导致 offset 越过未解析内容
+                let next_offset = batch.token_content().map(str::len).unwrap_or_default() as u64;
+                let (result_tx, result_rx) = std::sync::mpsc::channel();
+                if write_tx
+                    .send(WriteRequest::ReindexClaudeFile {
+                        logs,
+                        file_path: path_str.clone(),
+                        offset: next_offset,
+                        result_tx,
+                    })
+                    .is_ok()
+                {
+                    match result_rx.recv() {
+                        Ok(Ok(())) => {
+                            updated_offsets
+                                .push((crate::db::queries::claude_parser_marker(&path_str), 0));
+                            updated_offsets.push((path_str, next_offset));
+                        }
+                        result => log::warn!("Claude 日志重算未完成: {:?}", result),
+                    }
+                }
+                continue;
+            }
+            // 统计与实际读取的字节数一同提交，失败时下次启动仍可重读
+            let _ = write_tx.send(WriteRequest::InsertFileLogs {
+                logs,
+                file_path: path_str.clone(),
+                offset: next_offset,
+            });
+            updated_offsets.push((path_str, next_offset));
+        }
     }
-    log::info!(
-        "[冷启动] {} 完成: 扫描 {} 个文件, 解析 {} 条记录, 跳过 {} 个过期文件, 跳过 {} 个已处理文件",
-        agent_name,
-        total_files,
-        total_records,
-        skipped_old,
-        skipped_known
-    );
     updated_offsets
 }
 
@@ -402,6 +386,7 @@ fn start_watchers(
     known_offsets: &std::collections::HashMap<String, u64>,
     behavior: Option<&BehaviorRuntime>,
 ) {
+    let mut workers = Vec::new();
     // 分组
     let mut jsonl_agents: Vec<&dyn AgentPipeline> = Vec::new();
     let mut json_agents: Vec<&dyn AgentPipeline> = Vec::new();
@@ -434,7 +419,7 @@ fn start_watchers(
         if is_realtime {
             let initial_offsets = known_offsets.clone();
             let behavior_runtime = behavior.cloned();
-            thread::spawn(move || {
+            workers.push(thread::spawn(move || {
                 notify_strategy::run_notify_polling(
                     agent_names,
                     log_patterns,
@@ -443,10 +428,10 @@ fn start_watchers(
                     initial_offsets,
                     behavior_runtime,
                 );
-            });
+            }));
         } else {
             let behavior_runtime = behavior.cloned();
-            thread::spawn(move || {
+            workers.push(thread::spawn(move || {
                 polling_strategy::run_polling(
                     agent_names,
                     log_patterns,
@@ -455,7 +440,7 @@ fn start_watchers(
                     poll_secs,
                     behavior_runtime,
                 );
-            });
+            }));
         }
     }
 
@@ -470,7 +455,7 @@ fn start_watchers(
         let log_patterns: Vec<Vec<String>> = json_agents.iter().map(|a| a.log_paths()).collect();
 
         let behavior_runtime = behavior.cloned();
-        thread::spawn(move || {
+        workers.push(thread::spawn(move || {
             polling_strategy::run_polling(
                 agent_names,
                 log_patterns,
@@ -479,7 +464,7 @@ fn start_watchers(
                 poll_secs,
                 behavior_runtime,
             );
-        });
+        }));
     }
 
     // SQLite 策略
@@ -495,7 +480,7 @@ fn start_watchers(
                 .copied();
             let behavior_runtime = behavior.cloned();
 
-            thread::spawn(move || {
+            workers.push(thread::spawn(move || {
                 sqlite_strategy::run_sqlite_polling(sqlite_strategy::SqlitePollingConfig {
                     agent_name: name,
                     db_path: dp,
@@ -507,13 +492,16 @@ fn start_watchers(
                     keep_days,
                     behavior_runtime,
                 });
-            });
+            }));
         }
     }
 
     // 主线程等待停止信号
     while !stop_flag.load(Ordering::Relaxed) {
         thread::sleep(Duration::from_secs(1));
+    }
+    for worker in workers {
+        let _ = worker.join();
     }
 }
 
@@ -529,6 +517,7 @@ mod tests {
         pattern: String,
         token_calls: Arc<AtomicUsize>,
         behavior_calls: Arc<AtomicUsize>,
+        append_during_parse: bool,
     }
 
     impl AgentSource for ColdStartCountingAgent {
@@ -548,7 +537,15 @@ mod tests {
     }
 
     impl TokenExtractor for ColdStartCountingAgent {
-        fn extract_tokens(&self, _batch: &AgentDataBatch) -> TokenExtraction {
+        fn extract_tokens(&self, batch: &AgentDataBatch) -> TokenExtraction {
+            if self.append_during_parse {
+                use std::io::Write;
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(batch.source_key())
+                    .unwrap();
+                file.write_all("新增\n".as_bytes()).unwrap();
+            }
             self.token_calls.fetch_add(1, Ordering::Relaxed);
             TokenExtraction::default()
         }
@@ -594,6 +591,7 @@ mod tests {
             pattern: path.to_string_lossy().to_string(),
             token_calls: token_calls.clone(),
             behavior_calls: behavior_calls.clone(),
+            append_during_parse: false,
         };
         let (write_tx, _write_rx) = std::sync::mpsc::channel();
 
@@ -604,6 +602,7 @@ mod tests {
             365,
             &std::collections::HashMap::new(),
             &local_db_path,
+            &mut |_| {},
         );
 
         assert_eq!(updated_offsets.len(), 1);
@@ -630,6 +629,7 @@ mod tests {
             pattern: path.to_string_lossy().to_string(),
             token_calls: token_calls.clone(),
             behavior_calls: behavior_calls.clone(),
+            append_during_parse: false,
         };
         let (tx, rx) = std::sync::mpsc::channel();
         let writer =
@@ -643,10 +643,24 @@ mod tests {
             );
         let mut offsets =
             std::collections::HashMap::from([(path.to_string_lossy().to_string(), 3)]);
-        let updated = cold_start_adapter(&agent, &tx, 365, &offsets, &dir.path().join("local.db"));
+        let updated = cold_start_adapter(
+            &agent,
+            &tx,
+            365,
+            &offsets,
+            &dir.path().join("local.db"),
+            &mut |_| {},
+        );
         writer.join().unwrap();
         offsets.extend(updated);
-        cold_start_adapter(&agent, &tx, 365, &offsets, &dir.path().join("local.db"));
+        cold_start_adapter(
+            &agent,
+            &tx,
+            365,
+            &offsets,
+            &dir.path().join("local.db"),
+            &mut |_| {},
+        );
         // 没有旧 offset 的过期文件仍遵守保留天数，不因解析器升级而重新导入
         cold_start_adapter(
             &agent,
@@ -654,9 +668,111 @@ mod tests {
             365,
             &std::collections::HashMap::new(),
             &dir.path().join("local.db"),
+            &mut |_| {},
         );
         assert_eq!(token_calls.load(Ordering::Relaxed), 1);
         assert_eq!(behavior_calls.load(Ordering::Relaxed), 0);
+    }
+
+    /**
+     * 验证解析期间追加内容不会被冷启动断点越过，且缩小的文件会重新解析
+     */
+    #[test]
+    fn cold_start_preserves_unread_append_and_reloads_truncated_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, "{}\n").unwrap();
+        let path_string = path.to_string_lossy().to_string();
+        let agent = ColdStartCountingAgent {
+            name: "counting",
+            pattern: path_string.clone(),
+            token_calls: Arc::new(AtomicUsize::new(0)),
+            behavior_calls: Arc::new(AtomicUsize::new(0)),
+            append_during_parse: true,
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let offsets = std::collections::HashMap::from([(path_string.clone(), 100)]);
+        let mut checked = 0;
+        let updated = cold_start_adapter(
+            &agent,
+            &tx,
+            365,
+            &offsets,
+            &dir.path().join("db"),
+            &mut |failed| {
+                assert!(!failed);
+                checked += 1;
+            },
+        );
+        assert_eq!(checked, 1);
+        assert_eq!(updated, vec![(path_string, 3)]);
+        assert!(std::fs::metadata(path).unwrap().len() > 3);
+        assert!(matches!(
+            rx.recv().unwrap(),
+            WriteRequest::InsertFileLogs { offset: 3, .. }
+        ));
+        assert_eq!(agent.behavior_calls.load(Ordering::Relaxed), 0);
+    }
+
+    /**
+     * 验证过期且已被重写的历史文件只推进断点，不回放 token 或行为
+     */
+    #[test]
+    fn expired_history_advances_offset_without_replay() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, "{}\n").unwrap();
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH)
+            .unwrap();
+        let path_string = path.to_string_lossy().to_string();
+        let agent = ColdStartCountingAgent {
+            name: "counting",
+            pattern: path_string.clone(),
+            token_calls: Arc::new(AtomicUsize::new(0)),
+            behavior_calls: Arc::new(AtomicUsize::new(0)),
+            append_during_parse: false,
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let offsets = std::collections::HashMap::from([(path_string.clone(), 100)]);
+        let updated = cold_start_adapter(
+            &agent,
+            &tx,
+            1,
+            &offsets,
+            &dir.path().join("db"),
+            &mut |_| {},
+        );
+        assert_eq!(updated, vec![(path_string, 3)]);
+        assert!(matches!(
+            rx.recv().unwrap(),
+            WriteRequest::UpdateOffset { offset: 3, .. }
+        ));
+        assert_eq!(agent.token_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(agent.behavior_calls.load(Ordering::Relaxed), 0);
+    }
+
+    /**
+     * 验证完成屏障会等待写线程确认，并传递持久化失败
+     */
+    #[test]
+    fn flush_waits_for_writer_and_propagates_failure() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            done_tx.send(flush_writes(&tx)).unwrap();
+        });
+        let WriteRequest::Flush(ack) = rx.recv().unwrap() else {
+            panic!("expected flush");
+        };
+        assert!(matches!(
+            done_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        ack.send(Err("disk full".to_string())).unwrap();
+        assert_eq!(done_rx.recv().unwrap(), Err("disk full".to_string()));
+        worker.join().unwrap();
     }
 
     // --- offset 断点续传 ---

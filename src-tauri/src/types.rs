@@ -115,11 +115,23 @@ pub struct PricingRefreshResult {
 }
 
 /// 冷启动进度
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ColdStartProgress {
+    /** 新增用量已纳入启动期采集，不代表历史完整 */
+    pub live: bool,
+    /** 状态修订号，避免页面初始查询覆盖较新的事件 */
+    pub revision: u64,
+    /** recent / history / writing / complete */
+    pub phase: String,
+    /** 累计检查的文件数，包含无需重读的文件 */
+    pub files_checked: u32,
+    /** 读取或持久化失败次数 */
+    pub errors: u32,
     pub agent: String,
     pub done: bool,
+    /** 历史文件与 SQLite 会话任务总数 */
     pub total: u32,
+    /** 已处理任务数，失败次数单独显示 */
     pub completed: u32,
 }
 

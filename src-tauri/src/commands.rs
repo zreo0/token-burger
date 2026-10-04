@@ -42,6 +42,7 @@ pub struct AppState {
     pub account_usage: AccountUsageManager,
     pub(crate) account_usage_refresher: Mutex<Option<AccountUsageRefreshWorker>>,
     pub cold_start_complete: Arc<AtomicBool>,
+    pub cold_start_progress: Arc<Mutex<crate::types::ColdStartProgress>>,
     pub behavior: Arc<BehaviorDispatcher>,
     pub behavior_tips_enabled: Arc<AtomicBool>,
 }
@@ -52,10 +53,10 @@ pub(crate) fn start_pricing_refresher(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::from_secs(PRICING_REFRESH_CHECK_SECS)).await;
             if let Err(error) = refresh_pricing_state(&app, false).await {
                 log::warn!("后台刷新模型价格失败: {}", error);
             }
+            tokio::time::sleep(Duration::from_secs(PRICING_REFRESH_CHECK_SECS)).await;
         }
     });
 }
@@ -225,6 +226,20 @@ pub(crate) fn is_cold_start_complete(app: &AppHandle) -> bool {
         .unwrap_or(true)
 }
 
+/**
+ * 返回冷启动进度快照，供弹窗打开或重新加载时恢复状态
+ */
+#[tauri::command]
+pub fn get_cold_start_progress(
+    state: State<AppState>,
+) -> Result<crate::types::ColdStartProgress, String> {
+    state
+        .cold_start_progress
+        .lock()
+        .map(|progress| progress.clone())
+        .map_err(|e| e.to_string())
+}
+
 pub fn build_tray_menu(app: &AppHandle, language: &str) -> tauri::Result<Menu<tauri::Wry>> {
     let (settings_label, quit_label) = tray_menu_labels(language);
     let settings_item = MenuItemBuilder::with_id("settings", settings_label).build(app)?;
@@ -317,13 +332,21 @@ fn refresh_account_usage_and_emit(
     Ok(snapshots)
 }
 
+/**
+ * 在主线程更新托盘菜单语言，返回调度结果
+ */
 fn update_tray_menu_language(app: &AppHandle, language: &str) -> Result<(), String> {
-    if let Some(tray) = app.tray_by_id("main") {
-        let menu = build_tray_menu(app, language).map_err(|e| e.to_string())?;
-        tray.set_menu(Some(menu)).map_err(|e| e.to_string())?;
-    }
-
-    Ok(())
+    let handle = app.clone();
+    let language = language.to_string();
+    app.run_on_main_thread(move || {
+        if let Some(tray) = handle.tray_by_id("main") {
+            match build_tray_menu(&handle, &language).and_then(|menu| tray.set_menu(Some(menu))) {
+                Ok(()) => {}
+                Err(error) => log::warn!("更新托盘菜单失败: {}", error),
+            }
+        }
+    })
+    .map_err(|error| error.to_string())
 }
 
 fn db_path_from(state: &AppState) -> PathBuf {
@@ -347,7 +370,19 @@ pub(crate) fn sync_account_usage_tray_items(app: &AppHandle) {
 }
 
 /// 重启 Watcher 引擎（根据当前数据库中的设置重新创建）
-fn restart_watcher(state: &AppState) {
+fn restart_watcher(app: &AppHandle) {
+    let app = app.clone();
+    // 冷启动可能仍在解析大文件，等待旧 watcher 退出不得阻塞窗口主线程
+    thread::spawn(move || {
+        let state = app.state::<AppState>();
+        restart_watcher_in_background(&app, &state);
+    });
+}
+
+/**
+ * 串行重建监听器，冷启动被中断时继续补齐历史，参数为应用与共享状态
+ */
+fn restart_watcher_in_background(app: &AppHandle, state: &AppState) {
     let mut watcher_guard = state.watcher.lock().unwrap();
     if let Some(mut w) = watcher_guard.take() {
         w.stop(); // 阻塞等待旧线程退出
@@ -389,44 +424,60 @@ fn restart_watcher(state: &AppState) {
     });
 
     let write_tx = state.write_tx.lock().unwrap().clone();
-    let new_watcher = watcher::WatcherEngine::start_monitoring(
+    let new_watcher = watcher::WatcherEngine::start(
         active_agents,
         write_tx,
+        app.clone(),
         config,
         db_path_buf,
+        state.cold_start_complete.clone(),
+        state.cold_start_progress.clone(),
         behavior,
     );
-    state.cold_start_complete.store(true, Ordering::Release);
 
     *watcher_guard = Some(new_watcher);
 }
 
+/**
+ * 在工作线程查询指定范围汇总，返回统计数据，避免大量历史记录阻塞窗口事件
+ */
 #[tauri::command]
-pub fn get_token_summary(range: String, state: State<AppState>) -> Result<TokenSummary, String> {
-    let conn = db::open_readonly(&db_path_from(&state)).map_err(|e| e.to_string())?;
-    let enabled_agents = db::queries::get_enabled_agents(&conn);
-    let summary = db::queries::get_token_summary_for_agents(&conn, &range, &enabled_agents)
-        .map_err(|e| e.to_string())?;
-    Ok(summary)
+pub async fn get_token_summary(
+    range: String,
+    state: State<'_, AppState>,
+) -> Result<TokenSummary, String> {
+    let path = db_path_from(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_readonly(&path).map_err(|e| e.to_string())?;
+        let agents = db::queries::get_enabled_agents(&conn);
+        db::queries::get_token_summary_for_agents(&conn, &range, &agents).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /**
- * 查询当前启用 Agent 的趋势，返回本地统计库的时间桶和同期数据
+ * 在工作线程查询趋势，返回本地统计库的时间桶和同期数据
  */
 #[tauri::command]
-pub fn get_token_trend(
+pub async fn get_token_trend(
     range: String,
-    state: State<AppState>,
+    state: State<'_, AppState>,
 ) -> Result<crate::types::TokenTrend, String> {
-    let conn = db::open_readonly(&db_path_from(&state)).map_err(|e| e.to_string())?;
-    let agents = db::queries::get_enabled_agents(&conn);
-    db::queries::get_token_trend_for_agents(
-        &conn,
-        &range,
-        &agents,
-        &chrono::Local::now().to_rfc3339(),
-    )
-    .map_err(|e| e.to_string())
+    let path = db_path_from(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_readonly(&path).map_err(|e| e.to_string())?;
+        let agents = db::queries::get_enabled_agents(&conn);
+        db::queries::get_token_trend_for_agents(
+            &conn,
+            &range,
+            &agents,
+            &chrono::Local::now().to_rfc3339(),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -470,23 +521,13 @@ pub fn toggle_agent(
     state: State<AppState>,
 ) -> Result<(), String> {
     let conn = rusqlite::Connection::open(db_path_from(&state)).map_err(|e| e.to_string())?;
-    let defaults = AppSettings::default();
     let mut current = db::queries::get_enabled_agents(&conn);
-    let keep_days = db::queries::get_setting(&conn, "keep_days")
-        .unwrap_or(None)
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(defaults.keep_days);
-    let mut changed = false;
-
     if enabled {
         if !current.contains(&agent_name) {
             current.push(agent_name.clone());
-            changed = true;
         }
     } else {
-        let before = current.len();
         current.retain(|a| a != &agent_name);
-        changed = current.len() != before;
     }
 
     let json = serde_json::to_string(&current).map_err(|e| e.to_string())?;
@@ -494,17 +535,8 @@ pub fn toggle_agent(
     db::query_and_emit_today_summary(&app, &conn);
     drop(conn);
 
-    if enabled && changed {
-        let agents: Vec<Box<dyn adapters::AgentPipeline>> = adapters::all_agents()
-            .into_iter()
-            .filter(|a| a.agent_name() == agent_name)
-            .collect();
-        let write_tx = state.write_tx.lock().unwrap().clone();
-        watcher::catch_up_adapters(agents, write_tx, keep_days, db_path_from(&state));
-    }
-
     // Agent 变更后重启 Watcher
-    restart_watcher(&state);
+    restart_watcher(&app);
     Ok(())
 }
 
@@ -598,7 +630,7 @@ pub fn update_settings(
         key.as_str(),
         "watch_mode" | "polling_interval_secs" | "enabled_agents"
     ) {
-        restart_watcher(&state);
+        restart_watcher(&app);
     }
 
     if key == "enabled_agents" {

@@ -2,6 +2,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { listen } from '@tauri-apps/api/event';
+import { useColdStartProgress } from '../../../hooks/useColdStartProgress';
 import { getPopupWindowHeight, listenForPricingUpdates, Popup } from '../index';
 
 vi.mock('react-i18next', () => ({
@@ -16,6 +17,10 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 vi.mock('@tauri-apps/api/event', () => ({
     listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
+vi.mock('../../../hooks/useColdStartProgress', () => ({
+    useColdStartProgress: vi.fn(() => ({ progress: null, error: false, retry: vi.fn() })),
 }));
 
 vi.mock('../../../context/TokenContext', () => ({
@@ -72,7 +77,12 @@ describe('getPopupWindowHeight', () => {
 });
 
 describe('Popup rendering', () => {
-    it('不再在 Popup 内承担冷启动扫描状态展示', () => {
+    it.each(['recent', 'history', 'writing', 'complete'] as const)('后台 %s 阶段保持主页面内容可用', (phase) => {
+        vi.mocked(useColdStartProgress).mockReturnValue({
+            progress: { live: true, revision: 1, phase, done: phase === 'complete', agent: 'codex', total: 4, completed: 1, files_checked: 42, errors: 0 },
+            error: false,
+            retry: vi.fn(),
+        });
         const originalConsoleError = console.error;
         const consoleError = vi.spyOn(console, 'error').mockImplementation((message?: unknown, ...args: unknown[]) => {
             if (typeof message === 'string' && message.includes('useLayoutEffect does nothing')) {
@@ -84,8 +94,15 @@ describe('Popup rendering', () => {
         try {
             const markup = renderToStaticMarkup(React.createElement(Popup));
 
-            expect(markup).not.toContain('cold-start-light');
-            expect(markup).not.toContain('popup.coldStart');
+            expect(markup).toContain('burger-mock');
+            expect(markup).toContain('segmented-control');
+            if (phase === 'complete') {
+                expect(markup).not.toContain('startup-progress');
+            } else {
+                expect(markup).toContain('startup-progress');
+                expect(markup).toContain(phase === 'writing' ? 'popup.startupWriting' : phase === 'recent' ? 'popup.startupRecent' : 'popup.startupHistory');
+                expect(markup).toContain('popup.startupHint');
+            }
         } finally {
             consoleError.mockRestore();
         }

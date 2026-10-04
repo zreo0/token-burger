@@ -28,7 +28,7 @@ fn should_fetch_remote(force: bool, has_valid_today_cache: bool) -> bool {
     force || !has_valid_today_cache
 }
 
-/// 加载定价表：当天缓存 > 远程 > 历史缓存 > bundled > fallback
+/// 启动时只加载本地定价：当天缓存 > 历史缓存 > bundled > fallback，联网刷新在后台执行
 pub fn load_pricing_table(resources_dir: &Path) -> PricingTable {
     // 1. 尝试加载当天缓存
     if let Some(cached) = load_today_cache() {
@@ -36,22 +36,13 @@ pub fn load_pricing_table(resources_dir: &Path) -> PricingTable {
         return cached;
     }
 
-    // 2. 尝试远程获取并缓存
-    if let Some(remote) = fetch_remote_pricing() {
-        if let Err(error) = save_today_cache(&remote) {
-            log::warn!("保存当天定价缓存失败: {}", error);
-        }
-        log::info!("已从远程更新定价表");
-        return remote;
-    }
-
-    // 3. 尝试最近的历史缓存
+    // 2. 尝试最近的历史缓存
     if let Some(recent) = load_latest_cache() {
         log::info!("使用历史定价缓存");
         return recent;
     }
 
-    // 4. 尝试 bundled 文件
+    // 3. 尝试 bundled 文件
     let default_path = resources_dir.join("default_pricing.json");
     if let Ok(content) = std::fs::read_to_string(&default_path) {
         if let Ok(table) = serde_json::from_str::<PricingTable>(&content) {
@@ -59,7 +50,7 @@ pub fn load_pricing_table(resources_dir: &Path) -> PricingTable {
         }
     }
 
-    // 5. 硬编码 fallback
+    // 4. 硬编码 fallback
     log::warn!("无法加载定价数据，使用内置默认值");
     fallback_pricing()
 }

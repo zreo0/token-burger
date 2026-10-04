@@ -215,6 +215,17 @@ pub trait AgentSource: Send + Sync {
         Err("此 Agent source 不支持 SQLite session 查询".into())
     }
 
+    /**
+     * 列出指定时间之后有消息新增或更新的会话，默认回退到全部会话
+     */
+    fn list_recent_sqlite_session_ids(
+        &self,
+        conn: &rusqlite::Connection,
+        _since: i64,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        self.list_sqlite_session_ids(conn)
+    }
+
     /// 按 session created cursor 查询新建 message row
     fn query_sqlite_rows_by_created_cursor(
         &self,

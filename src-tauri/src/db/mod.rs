@@ -134,49 +134,43 @@ fn duration_until_next_local_day(now: chrono::DateTime<chrono::Local>) -> std::t
         .unwrap_or_else(|_| std::time::Duration::from_secs(1))
 }
 
+/**
+ * 在后台读取标题数据，再将托盘获取、更新和释放全部调度到主线程
+ * 参数为应用、数据库连接和总量，无返回值
+ */
 pub(crate) fn update_main_tray_title(app_handle: &AppHandle, conn: &Connection, total: i64) {
-    if let Some(tray) = app_handle.tray_by_id("main") {
-        let language = queries::get_setting(conn, "language")
-            .unwrap_or(None)
-            .unwrap_or_else(|| crate::types::AppSettings::default().language);
-        let token_title = crate::commands::main_tray_token_title(
-            &language,
-            total,
-            crate::commands::is_cold_start_complete(app_handle),
-        );
-        update_main_tray_usage_title(&tray, conn, token_title);
-    }
-}
-
-fn update_main_tray_usage_title(
-    tray: &tauri::tray::TrayIcon,
-    conn: &Connection,
-    token_title: String,
-) {
-    #[cfg(target_os = "macos")]
-    {
-        let items = crate::tray_usage::account_usage_menu_bar_items(conn);
-        let fallback_title = if items.is_empty() {
-            token_title.clone()
-        } else {
-            let suffix = items
-                .iter()
-                .map(|item| item.usage_title())
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("{token_title} {suffix}")
+    let language = queries::get_setting(conn, "language")
+        .unwrap_or(None)
+        .unwrap_or_else(|| crate::types::AppSettings::default().language);
+    let token_title = crate::commands::main_tray_token_title(
+        &language,
+        total,
+        crate::commands::is_cold_start_complete(app_handle),
+    );
+    let items = crate::tray_usage::account_usage_menu_bar_items(conn);
+    let suffix = items
+        .iter()
+        .map(|item| item.usage_title())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let fallback_title = if suffix.is_empty() {
+        token_title.clone()
+    } else {
+        format!("{token_title} {suffix}")
+    };
+    let app = app_handle.clone();
+    // Tauri 2.10 的 TrayIcon 内部持有 Rc，连 tray_by_id 的克隆也不能在后台执行
+    if let Err(error) = app_handle.run_on_main_thread(move || {
+        let Some(tray) = app.tray_by_id("main") else {
+            return;
         };
-        if crate::tray_usage::set_main_tray_usage_title(tray, token_title, items).is_err() {
-            let _ = tray.set_title(Some(&fallback_title));
+        #[cfg(target_os = "macos")]
+        if crate::tray_usage::set_main_tray_usage_title(&tray, token_title, items).is_ok() {
+            return;
         }
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let title = crate::tray_usage::account_usage_percentage_suffix(conn)
-            .map(|suffix| format!("{token_title} {suffix}"))
-            .unwrap_or(token_title);
-        let _ = tray.set_title(Some(&title));
+        let _ = tray.set_title(Some(&fallback_title));
+    }) {
+        log::warn!("更新托盘标题失败: {}", error);
     }
 }
 
@@ -235,8 +229,16 @@ pub fn open_readonly(db_path: &PathBuf) -> Result<Connection, rusqlite::Error> {
 
 /// 写请求类型
 pub enum WriteRequest {
+    /** 确认此前排队的写入已处理，并返回期间的写入错误 */
+    Flush(mpsc::Sender<Result<(), String>>),
     /// 批量插入 token logs
     InsertTokenLogs(Vec<TokenLog>),
+    /** 同一事务内保存文件统计与断点，失败时不推进断点 */
+    InsertFileLogs {
+        logs: Vec<TokenLog>,
+        file_path: String,
+        offset: u64,
+    },
     /**
      * 重算单个 Claude 文件并确认持久化，避免失败时提前推进解析版本
      */
@@ -283,8 +285,27 @@ impl DbManager {
                 }
             };
 
-            while let Ok(req) = write_rx.recv() {
+            let refresh_interval = std::time::Duration::from_secs(2);
+            let mut last_summary = std::time::Instant::now();
+            let mut summary_dirty = false;
+            let mut write_error: Option<String> = None;
+            loop {
+                let req = match write_rx.recv_timeout(refresh_interval) {
+                    Ok(req) => req,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if summary_dirty {
+                            query_and_emit_today_summary(&app_handle, &conn);
+                            summary_dirty = false;
+                            last_summary = std::time::Instant::now();
+                        }
+                        continue;
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                };
                 match req {
+                    WriteRequest::Flush(result_tx) => {
+                        let _ = result_tx.send(write_error.take().map_or(Ok(()), Err));
+                    }
                     WriteRequest::ReindexClaudeFile {
                         logs,
                         file_path,
@@ -293,7 +314,30 @@ impl DbManager {
                     } => {
                         let result = queries::reindex_claude_file(&conn, &logs, &file_path, offset)
                             .map_err(|error| error.to_string());
+                        match &result {
+                            Ok(()) => summary_dirty = true,
+                            Err(error) => write_error = Some(error.clone()),
+                        }
                         let _ = result_tx.send(result);
+                    }
+                    WriteRequest::InsertFileLogs {
+                        logs,
+                        file_path,
+                        offset,
+                    } => {
+                        match queries::batch_insert_token_logs_and_update_offset(
+                            &conn, &logs, &file_path, offset,
+                        ) {
+                            Ok(()) => summary_dirty |= !logs.is_empty(),
+                            Err(error) => {
+                                write_error = Some(error.to_string());
+                                log::error!(
+                                    "文件统计写入失败，保留旧断点 {}: {}",
+                                    file_path,
+                                    error
+                                );
+                            }
+                        }
                     }
                     WriteRequest::InsertTokenLogs(logs) => {
                         let count = logs.len();
@@ -314,24 +358,11 @@ impl DbManager {
                             total_cost
                         );
                         if let Err(e) = queries::batch_insert_token_logs(&conn, &logs) {
+                            write_error = Some(e.to_string());
                             log::error!("批量插入失败: {}", e);
                             continue;
                         }
-                        // 入库后查询今日汇总并广播
-                        let enabled_agents = queries::get_enabled_agents(&conn);
-                        match queries::get_token_summary_for_agents(&conn, "today", &enabled_agents)
-                        {
-                            Ok(summary) => {
-                                log::info!(
-                                    "[db] 今日汇总: total={}, input={}, output={}, cache_read={}, cache_create={}, agent_cost=${:.2}",
-                                    summary.total, summary.input, summary.output, summary.cache_read, summary.cache_create, summary.agent_cost
-                                );
-                                emit_token_summary(&app_handle, &conn, &summary);
-                            }
-                            Err(e) => {
-                                log::error!("查询汇总失败: {}", e);
-                            }
-                        }
+                        summary_dirty = true;
                     }
                     WriteRequest::InsertTokenLogsAndUpdateSqliteCursors {
                         logs,
@@ -359,31 +390,14 @@ impl DbManager {
                             &conn, &logs, &cursors,
                         ) {
                             let message = e.to_string();
+                            write_error = Some(message.clone());
                             log::error!("批量插入并更新 SQLite cursor 失败: {}", message);
                             let _ = result_tx.send(Err(message));
                             continue;
                         }
                         let _ = result_tx.send(Ok(()));
 
-                        if !logs.is_empty() {
-                            let enabled_agents = queries::get_enabled_agents(&conn);
-                            match queries::get_token_summary_for_agents(
-                                &conn,
-                                "today",
-                                &enabled_agents,
-                            ) {
-                                Ok(summary) => {
-                                    log::info!(
-                                        "[db] 今日汇总: total={}, input={}, output={}, cache_read={}, cache_create={}, agent_cost=${:.2}",
-                                        summary.total, summary.input, summary.output, summary.cache_read, summary.cache_create, summary.agent_cost
-                                    );
-                                    emit_token_summary(&app_handle, &conn, &summary);
-                                }
-                                Err(e) => {
-                                    log::error!("查询汇总失败: {}", e);
-                                }
-                            }
-                        }
+                        summary_dirty |= !logs.is_empty();
                     }
                     WriteRequest::ClearData(keep_days) => {
                         if let Err(e) = queries::clear_data(&conn, keep_days) {
@@ -395,9 +409,16 @@ impl DbManager {
                     }
                     WriteRequest::UpdateOffset { file_path, offset } => {
                         if let Err(e) = queries::update_offset(&conn, &file_path, offset) {
+                            write_error = Some(e.to_string());
                             log::error!("更新 offset 失败: {}", e);
                         }
                     }
+                }
+                // 持续入库时最多每两秒汇总一次，空闲后也要发布最后一批变化
+                if summary_dirty && last_summary.elapsed() >= refresh_interval {
+                    query_and_emit_today_summary(&app_handle, &conn);
+                    summary_dirty = false;
+                    last_summary = std::time::Instant::now();
                 }
             }
         });

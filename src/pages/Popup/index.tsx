@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useToken } from '../../context/TokenContext';
+import { useColdStartProgress } from '../../hooks/useColdStartProgress';
 import { useAccountUsageContext } from '../../context/AccountUsageContext';
 import Burger from '../../components/Burger';
 import AccountUsageCard from '../../components/AccountUsageCard';
@@ -62,6 +63,7 @@ export function listenForPricingUpdates(onUpdate: () => void): Promise<UnlistenF
  */
 export function Popup() {
     const { t } = useTranslation();
+    const { progress: coldStart, error: progressError, retry: retryProgress } = useColdStartProgress();
     const { summary, loading, error, refresh, range, setRange } = useToken();
     const { snapshots, providers, reload: reloadAccountUsage } = useAccountUsageContext();
     const [trendResult, setTrendResult] = useState<{ range: TimeRange; data: TokenTrend } | null>(null);
@@ -236,6 +238,18 @@ export function Popup() {
                     </button>
                 </header>
                 {settingsError && <p className="inline-error" role="alert">{t('popup.settingsError')}</p>}
+                {coldStart && !coldStart.done && (
+                    <section className="startup-progress" role="status" aria-live="polite">
+                        <div className="startup-heading">
+                            <strong>{t(coldStart.phase === 'writing' ? 'popup.startupWriting' : coldStart.phase === 'recent' ? 'popup.startupRecent' : 'popup.startupHistory', { agent: coldStart.agent })}</strong>
+                            <span>{t('popup.startupSources', { completed: coldStart.completed, total: coldStart.total })}</span>
+                        </div>
+                        <progress aria-label={t('popup.startupAgents')} max={Math.max(1, coldStart.total)} value={coldStart.completed} />
+                        <p>{coldStart.live && <span className="startup-live">{t('popup.startupLive')} · </span>}{t('popup.startupHint')}</p>
+                    </section>
+                )}
+                {coldStart && coldStart.errors > 0 && <p className="inline-error" role="alert">{t('popup.startupErrors', { count: coldStart.errors })}</p>}
+                {progressError && <p className="inline-error" role="alert">{t('popup.startupStatusError')} <button type="button" onClick={retryProgress}>{t('common.retry')}</button></p>}
                 <div className="segmented-control" aria-label={t('popup.timeRange')}>
                     {TIME_RANGES.map(({ key, labelKey }) => (
                         <button type="button" key={key} className={`segment ${range === key ? 'active' : ''}`}
@@ -249,12 +263,12 @@ export function Popup() {
                     <div className="summary-item">
                         <span className="summary-label">{t('popup.total')}</span>
                         <span className="summary-value" title={summary?.total.toLocaleString()}>{error ? '—' : isSummaryLoading ? <span className="skeleton-pulse" /> : formatTokenCount(summary?.total ?? 0, true)}</span>
-                        <span className="summary-change">{!error && !loading && !trendLoading && !trendError && tokenChange ? t(range === 'today' ? 'popup.dailyChange' : 'popup.periodChange', { change: tokenChange }) : t('popup.localRecords')}</span>
+                        <span className="summary-change">{(!coldStart || coldStart.done) && !error && !loading && !trendLoading && !trendError && tokenChange ? t(range === 'today' ? 'popup.dailyChange' : 'popup.periodChange', { change: tokenChange }) : t(coldStart && !coldStart.done ? 'popup.startupIncomplete' : 'popup.localRecords')}</span>
                     </div>
                     <div className="summary-item">
                         <span className="summary-label">{t('popup.cost')}</span>
                         <span className="summary-value cost" title={t('popup.costHint')}>{error ? '—' : isCostLoading ? <span className="skeleton-pulse" /> : formatCost(cost)}</span>
-                        <span className="summary-change">{!error && !loading && !trendLoading && !trendError && costChange ? costChange : t('popup.estimated')}</span>
+                        <span className="summary-change">{(!coldStart || coldStart.done) && !error && !loading && !trendLoading && !trendError && costChange ? costChange : t('popup.estimated')}</span>
                     </div>
                 </section>
                 <TrendChart trend={trend} pricing={pricing} range={range} loading={(trendLoading && !trend) || !pricingReady} error={trendError} onRetry={() => setTrendRetry(value => value + 1)} />
