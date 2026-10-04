@@ -17,10 +17,10 @@ export const BURGER_THEMES: BurgerTheme[] = [
         id: 'warm',
         labelKey: 'settings.themeWarm',
         colors: {
-            output: '#F8D08E',
-            cache_read: '#B2DE75',
-            cache_create: '#F4B298',
-            input: '#F8C97E',
+            output: '#E5B360',
+            cache_read: '#97B95E',
+            cache_create: '#DF7159',
+            input: '#E0B36B',
         },
     },
     {

@@ -25,6 +25,32 @@ pub struct TokenSummary {
     pub by_model: HashMap<String, TokenBreakdown>,
 }
 
+/**
+ * 趋势时间桶，保存模型细分以复用前端定价规则
+ */
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TokenTrendBucket {
+    /// 时间桶起点，Unix 秒
+    pub start: i64,
+    /// 时间桶终点，Unix 秒
+    pub end: i64,
+    /// 桶内模型用量
+    pub by_model: HashMap<String, TokenBreakdown>,
+}
+
+/**
+ * 本地日志趋势及可比较的上一周期
+ */
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TokenTrend {
+    /// 包含零用量区间的时间桶
+    pub buckets: Vec<TokenTrendBucket>,
+    /// 上一周期模型用量
+    pub previous_by_model: HashMap<String, TokenBreakdown>,
+    /// 已有日志是否覆盖上一周期起点
+    pub comparison_available: bool,
+}
+
 /// Agent 信息（IPC 传输用）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AgentInfo {

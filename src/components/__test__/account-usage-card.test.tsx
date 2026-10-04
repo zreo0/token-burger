@@ -93,7 +93,7 @@ describe('AccountUsageCard', () => {
         expect(markup).toContain('Account Usage');
         expect(markup).toContain('Codex');
         expect(markup).toContain('5x');
-        expect(markup).not.toContain('user@example.com');
+        expect(markup).toContain('user@example.com');
         expect(markup).toContain('5h window');
         expect(markup).toContain('12.5%');
         expect(markup).toContain('7d window');
@@ -197,8 +197,9 @@ describe('AccountUsageCard', () => {
 
         const markup = renderToStaticMarkup(<AccountUsageCard />);
 
-        expect(markup).toContain('usage-reset-credit-badge');
-        expect(markup).toContain('reset 3 ·');
+        expect(markup).toContain('usage-credit-detail');
+        expect(markup).toContain('Available resets');
+        expect(markup).toContain('Next credit expires in');
         expect(markup).not.toContain('usage-summary-reset');
     });
 

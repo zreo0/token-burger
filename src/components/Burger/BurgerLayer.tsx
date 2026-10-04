@@ -1,87 +1,52 @@
-import { motion, useSpring, useTransform } from 'framer-motion';
+import { motion, useReducedMotion, useSpring } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { formatTokenCount } from '../../utils/format';
 import type { TimeRange } from '../../types';
 
 interface BurgerLayerProps {
+    /** 类型名称 */
     label: string;
+    /** 当前用量 */
     count: number;
+    /** 食材颜色 */
     color: string;
+    /** 食材类型 */
     variant: 'bread' | 'cache';
+    /** 汉堡中的位置 */
     position: 'top' | 'middle' | 'bottom';
-    maxCount?: number;
+    /** 总用量，用于展示准确占比 */
+    total: number;
+    /** 当前时间范围 */
     range?: TimeRange;
 }
 
-export const BREAD_HEIGHT = 36;
-export const CACHE_MIN_HEIGHT = 24;
-export const CACHE_MAX_HEIGHT = 72;
-
+/**
+ * 按时间范围返回数值动画参数，实时更新较柔和，范围切换较快
+ */
 export function getLayerSpringConfig(range: TimeRange) {
-    if (range === 'today') {
-        return { stiffness: 110, damping: 24, mass: 0.9 };
-    }
-
-    return { stiffness: 320, damping: 34, mass: 0.8 };
+    return range === 'today'
+        ? { stiffness: 110, damping: 24, mass: 0.9 }
+        : { stiffness: 320, damping: 34, mass: 0.8 };
 }
 
-export function getCacheLayerHeight(count: number, maxCount: number): number {
-    if (count <= 0 || maxCount <= 0) {
-        return CACHE_MIN_HEIGHT;
-    }
-
-    const normalized = Math.min(count / maxCount, 1);
-    const curved = Math.pow(normalized, 0.45);
-
-    return CACHE_MIN_HEIGHT + (CACHE_MAX_HEIGHT - CACHE_MIN_HEIGHT) * curved;
-}
-
-function BurgerLayer({
-    label,
-    count,
-    color,
-    variant,
-    position: _position,
-    maxCount = 1_000_000,
-    range = 'today',
-}: BurgerLayerProps) {
+/**
+ * 根据用量和主题渲染一层食材，固定高度避免将装饰厚度误读为占比
+ */
+function BurgerLayer({ label, count, color, variant, position, total, range = 'today' }: BurgerLayerProps) {
     const spring = useSpring(count, getLayerSpringConfig(range));
-    const height = useTransform(
-        spring,
-        (latest) => (variant === 'bread' ? BREAD_HEIGHT : getCacheLayerHeight(latest, maxCount))
-    );
-
-    useEffect(() => {
-        spring.set(count);
-    }, [count, spring]);
-
+    const reducedMotion = useReducedMotion();
     const [displayCount, setDisplayCount] = useState(count);
 
-    useEffect(() => {
-        const unsubscribe = spring.on('change', (latest) => {
-            setDisplayCount(Math.round(latest));
-        });
-
-        return unsubscribe;
-    }, [spring]);
+    useEffect(() => { spring.set(count); }, [count, spring]);
+    useEffect(() => spring.on('change', latest => setDisplayCount(Math.round(latest))), [spring]);
 
     return (
-        <motion.div
-            className={`burger-layer burger-layer--${variant}`}
-            layout
-            style={{
-                height,
-                backgroundColor: color,
-            }}
-            transition={{
-                layout: range === 'today'
-                    ? { duration: 0.28, ease: 'easeOut' }
-                    : { duration: 0.18, ease: 'easeOut' },
-            }}
-            aria-label={`${label} ${formatTokenCount(displayCount)}`}
-        >
+        <motion.div className={`burger-layer burger-layer--${variant} burger-layer--${position}`}
+            style={{ backgroundColor: color }} aria-label={`${label} ${count.toLocaleString()}`}>
+            {position === 'top' && <span className="sesame" aria-hidden="true">{Array.from({ length: 9 }, (_, index) => <i key={index} />)}</span>}
             <span className="layer-label">{label}</span>
-            <span className="layer-count">{formatTokenCount(displayCount)}</span>
+            <span className="layer-count" title={count.toLocaleString()}>{formatTokenCount(reducedMotion ? count : displayCount, true)}</span>
+            <span className="layer-percent">{total > 0 ? `${Math.round(count / total * 100)}%` : '—'}</span>
         </motion.div>
     );
 }

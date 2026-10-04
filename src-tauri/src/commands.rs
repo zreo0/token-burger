@@ -410,6 +410,25 @@ pub fn get_token_summary(range: String, state: State<AppState>) -> Result<TokenS
     Ok(summary)
 }
 
+/**
+ * 查询当前启用 Agent 的趋势，返回本地统计库的时间桶和同期数据
+ */
+#[tauri::command]
+pub fn get_token_trend(
+    range: String,
+    state: State<AppState>,
+) -> Result<crate::types::TokenTrend, String> {
+    let conn = db::open_readonly(&db_path_from(&state)).map_err(|e| e.to_string())?;
+    let agents = db::queries::get_enabled_agents(&conn);
+    db::queries::get_token_trend_for_agents(
+        &conn,
+        &range,
+        &agents,
+        &chrono::Local::now().to_rfc3339(),
+    )
+    .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn get_agent_list(state: State<AppState>) -> Result<Vec<AgentInfo>, String> {
     let conn = db::open_readonly(&db_path_from(&state)).map_err(|e| e.to_string())?;

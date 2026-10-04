@@ -6,7 +6,6 @@ import { formatTokenCount } from '../../utils/format';
 import type { AccountUsageMetric, AccountUsageProviderInfo, AccountUsageSnapshot } from '../../types';
 import './index.css';
 
-const MAX_SUMMARY_METRICS = 4;
 const RESET_CREDIT_METRIC_KEY = 'codex.reset_credits.available';
 
 const PLAN_BADGE_LABELS: Record<string, Record<string, string>> = {
@@ -16,11 +15,6 @@ const PLAN_BADGE_LABELS: Record<string, Record<string, string>> = {
 };
 
 type Translate = TFunction;
-
-interface ResetCreditBadge {
-    text: string;
-    title: string;
-}
 
 export function getAccountUsagePlanBadge(providerId: string, plan?: string | null): string | null {
     const normalizedPlan = plan?.trim();
@@ -89,28 +83,21 @@ function getAccountUsageMetricLabel(metric: AccountUsageMetric, t: Translate): s
     if (isResetCreditMetric(metric)) {
         return t('usage.resetCredits', 'Reset credits');
     }
+    const window = metric.label.match(/^(\d+)(h|d) window$/);
+    if (window) return t(window[2] === 'h' ? 'usage.hourWindow' : 'usage.dayWindow', metric.label, { count: Number(window[1]) });
     return metric.label;
 }
 
-function getResetCreditBadge(metric: AccountUsageMetric, now: Date, t: Translate): ResetCreditBadge {
-    const count = Math.round(metric.remaining ?? metric.used ?? 0);
-    const resetTime = formatAccountUsageResetTime(metric.reset_at, now);
-
-    if (!resetTime) {
-        return {
-            text: t('usage.resetCreditsBadge', 'reset {{count}}', { count }),
-            title: t('usage.resetCreditsTooltip', '{{count}} reset credits available', { count }),
-        };
-    }
-
-    return {
-        text: t('usage.resetCreditsBadgeWithExpiry', 'reset {{count}} · {{time}}', { count, time: resetTime }),
-        title: t(
-            'usage.resetCreditsTooltipWithExpiry',
-            '{{count}} reset credits available, next expires in {{time}}',
-            { count, time: resetTime },
-        ),
-    };
+/**
+ * 将剩余时间转换为本地化短文本，参数为时间和翻译器，返回倒计时
+ */
+function localizedResetTime(resetAt: string | null | undefined, now: Date, t: Translate): string | null {
+    const raw = formatAccountUsageResetTime(resetAt, now);
+    const value = raw?.includes('d') ? raw.replace(/\d+m$/, '') : raw;
+    if (!value) return null;
+    return value.replace(/(\d+)d/g, (_, count) => t('usage.daysShort', '{{count}}d ', { count }))
+        .replace(/(\d+)h/g, (_, count) => t('usage.hoursShort', '{{count}}h ', { count }))
+        .replace(/(\d+)m/g, (_, count) => t('usage.minutesShort', '{{count}}m', { count })).trim();
 }
 
 function progressTone(percent: number): string {
@@ -119,37 +106,35 @@ function progressTone(percent: number): string {
     return 'ok';
 }
 
+/**
+ * 展示单个额度窗口，参数为指标、当前时间与翻译器，返回进度和重置说明
+ */
 function QuotaMetric({ metric, now, t }: { metric: AccountUsageMetric; now: Date; t: Translate }) {
     const percent = getMetricPercent(metric) ?? 0;
-    const resetTime = formatAccountUsageResetTime(metric.reset_at, now);
-
+    const resetTime = localizedResetTime(metric.reset_at, now, t);
+    const label = getAccountUsageMetricLabel(metric, t);
     return (
         <div className="usage-quota-metric">
-            <div className="usage-metric-line">
-                <span>{getAccountUsageMetricLabel(metric, t)}</span>
-                <span className="usage-metric-stats">
-                    {resetTime && <span className="usage-reset-time">{resetTime}</span>}
-                    <span className="usage-metric-value">{formatAccountUsageMetricValue(metric)}</span>
-                </span>
+            <span className="usage-metric-label">{label}</span>
+            <div className="usage-progress-track" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+                <div className={`usage-progress-fill ${progressTone(percent)}`} style={{ transform: `scaleX(${percent / 100})` }} />
             </div>
-            <div className="usage-progress-track" aria-hidden="true">
-                <div
-                    className={`usage-progress-fill ${progressTone(percent)}`}
-                    style={{ width: `${percent}%` }}
-                />
+            <div className="usage-metric-stats">
+                <span className="usage-metric-value">{t('usage.usedPercent', 'Used {{percent}}%', { percent: percent.toFixed(1) })}</span>
+                {resetTime && <span className="usage-reset-time">{t('usage.resetsIn', 'Resets in {{time}}', { time: resetTime })}</span>}
             </div>
         </div>
     );
 }
 
 function SummaryMetric({ metric, now, t }: { metric: AccountUsageMetric; now: Date; t: Translate }) {
-    const resetTime = formatAccountUsageResetTime(metric.reset_at, now);
+    const resetTime = localizedResetTime(metric.reset_at, now, t);
 
     return (
         <span className="usage-summary-pill">
             <span className="usage-summary-label">{getAccountUsageMetricLabel(metric, t)}</span>
             <span className="usage-summary-value">{formatAccountUsageMetricValue(metric)}</span>
-            {resetTime && <span className="usage-summary-reset">{resetTime}</span>}
+            {resetTime && <span className="usage-summary-reset">{t('usage.resetsIn', 'Resets in {{time}}', { time: resetTime })}</span>}
         </span>
     );
 }
@@ -174,7 +159,7 @@ function RefreshIconButton({
             title={label}
             aria-label={label}
         >
-            {refreshing ? '…' : '↻'}
+            <svg className={refreshing ? 'refresh-spinning' : ''} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5" /><path d="M19 11a7 7 0 0 0-12-5L4 9m1 4a7 7 0 0 0 12 5l3-3" /></svg>
         </button>
     );
 }
@@ -212,6 +197,7 @@ function ProviderUsageCard({
     provider,
     refreshing,
     refreshProvider,
+    refreshError,
     t,
     now,
 }: {
@@ -221,13 +207,15 @@ function ProviderUsageCard({
     refreshProvider: (providerId: string) => void;
     t: Translate;
     now: Date;
+    refreshError?: string;
 }) {
     const metrics = snapshot.metrics ?? [];
     const quotaMetrics = metrics.filter(isQuotaMetric);
-    const summaryMetrics = metrics.filter(metric => !isQuotaMetric(metric) && !isResetCreditMetric(metric)).slice(0, MAX_SUMMARY_METRICS);
+    const summaryMetrics = metrics.filter(metric => !isQuotaMetric(metric) && !isResetCreditMetric(metric));
     const hasError = snapshot.status === 'error' || snapshot.status === 'auth_required' || snapshot.status === 'forbidden';
     const resetCreditMetric = metrics.find(isResetCreditMetric);
-    const resetCreditBadge = !hasError && resetCreditMetric ? getResetCreditBadge(resetCreditMetric, now, t) : null;
+    const creditExpiry = resetCreditMetric ? localizedResetTime(resetCreditMetric.reset_at, now, t) : null;
+    const [expanded, setExpanded] = useState(true);
     const planBadge = getAccountUsagePlanBadge(snapshot.provider_id, snapshot.plan);
 
     return (
@@ -236,19 +224,19 @@ function ProviderUsageCard({
                 <div className="usage-provider-title-row">
                     <span className="usage-provider-name">{provider?.display_name || snapshot.provider_id}</span>
                     {planBadge && <span className="usage-plan-badge">{planBadge}</span>}
-                    {resetCreditBadge && (
-                        <span className="usage-reset-credit-badge" title={resetCreditBadge.title}>
-                            {resetCreditBadge.text}
-                        </span>
-                    )}
                     {snapshot.stale && <span className="usage-stale-text">{t('usage.stale', 'Stale')}</span>}
                 </div>
-                <RefreshIconButton refreshing={refreshing} onClick={() => refreshProvider(snapshot.provider_id)} t={t} />
+                <div className="usage-provider-actions">
+                    <RefreshIconButton refreshing={refreshing} onClick={() => refreshProvider(snapshot.provider_id)} t={t} />
+                    <button className="usage-expand" type="button" aria-label={t(expanded ? 'usage.collapse' : 'usage.expand', expanded ? 'Collapse account details' : 'Expand account details')} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d={expanded ? 'm3 6 5 5 5-5' : 'm6 3 5 5-5 5'} /></svg>
+                    </button>
+                </div>
             </div>
 
             {hasError ? (
                 <p className="usage-error-text">{snapshot.error?.message || snapshot.status}</p>
-            ) : (
+            ) : expanded ? (
                 <>
                     {quotaMetrics.length > 0 && (
                         <div className="usage-quota-list">
@@ -257,6 +245,15 @@ function ProviderUsageCard({
                             ))}
                         </div>
                     )}
+                    {resetCreditMetric && (
+                        <div className="usage-credit-detail">
+                            <div><span>{t('usage.availableResets', 'Available resets')}</span><strong>{formatAccountUsageMetricValue(resetCreditMetric)}</strong></div>
+                            {creditExpiry && <p>{t('usage.creditExpires', 'Next credit expires in {{time}}', { time: creditExpiry })}</p>}
+                        </div>
+                    )}
+                    {refreshError && <p className="usage-error-text" role="alert">{refreshError}</p>}
+                    {snapshot.error && <p className="usage-error-text">{snapshot.error.message}</p>}
+                    {!metrics.length && <p className="usage-muted-text">{t('usage.noData', 'No account usage data yet')}</p>}
                     {summaryMetrics.length > 0 && (
                         <div className="usage-summary-list">
                             {summaryMetrics.map(metric => (
@@ -264,8 +261,14 @@ function ProviderUsageCard({
                             ))}
                         </div>
                     )}
+                    <details className="usage-extra-details">
+                        <summary>{t('usage.details', 'Details')}</summary>
+                        {snapshot.account_label && <p>{snapshot.account_label}</p>}
+                        <p>{t('popup.updatedAt', 'Updated {{time}}', { time: new Date(snapshot.observed_at).toLocaleString() })}</p>
+                        {quotaMetrics.filter(metric => metric.limit != null && metric.unit !== 'percent').map(metric => <p key={metric.metric_key}>{metric.label}: {metric.used ?? '—'} / {metric.limit} {metric.unit}</p>)}
+                    </details>
                 </>
-            )}
+            ) : <p className="usage-muted-text">{quotaMetrics.map(metric => `${getAccountUsageMetricLabel(metric, t)} · ${formatAccountUsageMetricValue(metric)}`).join(' / ')}</p>}
         </article>
     );
 }
@@ -294,9 +297,7 @@ export default function AccountUsageCard() {
         <section className="account-usage-card">
             <div className="usage-card-header">
                 <span>{t('usage.title', 'Account Usage')}</span>
-                <button type="button" className="usage-refresh-all" onClick={refreshAll} disabled={refreshing}>
-                    {refreshing ? t('common.loading', 'Loading') : t('common.refresh', 'Refresh')}
-                </button>
+                <RefreshIconButton refreshing={refreshing} onClick={refreshAll} t={t} />
             </div>
 
             <div className="usage-card-grid">
@@ -317,6 +318,7 @@ export default function AccountUsageCard() {
                         snapshot={snapshot}
                         provider={providers.find(provider => provider.id === snapshot.provider_id)}
                         refreshing={!!refreshingProviders[snapshot.provider_id]}
+                        refreshError={providerErrors[snapshot.provider_id]}
                         refreshProvider={refreshProvider}
                         t={t}
                         now={now}

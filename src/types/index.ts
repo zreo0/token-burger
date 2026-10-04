@@ -37,6 +37,18 @@ export interface TokenSummary {
     by_model: Record<string, TokenBreakdown>;
 }
 
+/**
+ * 趋势接口返回的时间桶和上一周期统计
+ */
+export interface TokenTrend {
+    /** 时间边界为 Unix 秒，桶内保留模型定价需要的字段 */
+    buckets: { start: number; end: number; by_model: Record<string, TokenBreakdown> }[];
+    /** 上一可比周期的模型统计 */
+    previous_by_model: Record<string, TokenBreakdown>;
+    /** 是否已有覆盖比较周期起点的日志 */
+    comparison_available: boolean;
+}
+
 // Agent 信息
 export interface AgentInfo {
     name: string;

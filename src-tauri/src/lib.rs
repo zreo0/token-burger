@@ -20,9 +20,9 @@ use tauri::{
 };
 
 const POPUP_WINDOW_LABEL: &str = "popup";
-const POPUP_WINDOW_WIDTH: f64 = 390.0;
-const POPUP_WINDOW_HEIGHT: f64 = 540.0;
-const POPUP_WINDOW_MAX_HEIGHT: f64 = 680.0;
+const POPUP_WINDOW_WIDTH: f64 = 420.0;
+const POPUP_WINDOW_HEIGHT: f64 = 600.0;
+const POPUP_WINDOW_MAX_HEIGHT: f64 = 860.0;
 const POPUP_OFFSCREEN_POSITION: f64 = -10_000.0;
 #[cfg(not(target_os = "windows"))]
 const TRANSPARENT_BACKGROUND: Color = Color(0, 0, 0, 0);
@@ -141,6 +141,30 @@ fn show_popup<R: Runtime>(window: &WebviewWindow<R>) {
     let _ = window.emit("popup-shown", ());
 }
 
+/**
+ * 打开或重建设置窗口，供菜单和弹窗按钮共用，返回窗口操作结果
+ */
+#[tauri::command]
+fn open_settings(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings") {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())
+    } else {
+        tauri::WebviewWindowBuilder::new(
+            &app,
+            "settings",
+            WebviewUrl::App("index.html#/settings".into()),
+        )
+        .title("TokenBurger Settings")
+        .inner_size(720.0, 540.0)
+        .min_inner_size(560.0, 400.0)
+        .resizable(true)
+        .build()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+}
+
 #[tauri::command]
 fn restart_app(app: AppHandle) {
     app.request_restart();
@@ -157,9 +181,32 @@ fn resize_popup_window(app: AppHandle, height: f64) -> Result<(), String> {
         POPUP_WINDOW_HEIGHT
     };
 
+    // 菜单栏靠近屏幕边缘时先限制窗口大小，再将完整弹窗移入工作区
+    let monitor = popup.current_monitor().ok().flatten();
+    let height = monitor
+        .as_ref()
+        .map(|monitor| {
+            (monitor.work_area().size.height as f64 / monitor.scale_factor() - 12.0).max(1.0)
+        })
+        .unwrap_or(POPUP_WINDOW_MAX_HEIGHT)
+        .min(target_height);
     popup
-        .set_size(LogicalSize::new(POPUP_WINDOW_WIDTH, target_height))
-        .map_err(|error| error.to_string())
+        .set_size(LogicalSize::new(POPUP_WINDOW_WIDTH, height))
+        .map_err(|error| error.to_string())?;
+    if let (Some(monitor), Ok(position)) = (monitor, popup.outer_position()) {
+        let scale = monitor.scale_factor();
+        let area = monitor.work_area();
+        let left = area.position.x as f64 / scale;
+        let top = area.position.y as f64 / scale;
+        let right = left + area.size.width as f64 / scale;
+        let bottom = top + area.size.height as f64 / scale;
+        let x = (position.x as f64 / scale).clamp(left, (right - POPUP_WINDOW_WIDTH).max(left));
+        let y = (position.y as f64 / scale).clamp(top, (bottom - height - 6.0).max(top));
+        popup
+            .set_position(LogicalPosition::new(x, y))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 pub fn run() {
@@ -318,30 +365,14 @@ pub fn run() {
                 .tooltip("TokenBurger")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| {
-                    match event.id().as_ref() {
-                        "settings" => {
-                            if let Some(window) = app.get_webview_window("settings") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            } else {
-                                // 窗口被销毁时重建
-                                let _ = tauri::WebviewWindowBuilder::new(
-                                    app,
-                                    "settings",
-                                    WebviewUrl::App("index.html#/settings".into()),
-                                )
-                                .title("TokenBurger Settings")
-                                .inner_size(640.0, 520.0)
-                                .resizable(true)
-                                .build();
-                            }
-                        }
-                        "quit" => {
-                            std::process::exit(0);
-                        }
-                        _ => {}
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "settings" => {
+                        let _ = open_settings(app.clone());
                     }
+                    "quit" => {
+                        std::process::exit(0);
+                    }
+                    _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
                     // 通知 positioner 插件处理 tray 事件（用于窗口定位）
@@ -388,6 +419,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_token_summary,
+            commands::get_token_trend,
+            open_settings,
             commands::get_agent_list,
             commands::toggle_agent,
             commands::clear_data,

@@ -1,301 +1,392 @@
 .settings-shell {
+    --settings-bg: #272624;
+    --settings-sidebar: #22211f;
+    --settings-surface: #302f2c;
+    --settings-control: #3a3834;
+    --settings-text: #f4f0e8;
+    --settings-muted: #b8b5ae;
+    --settings-line: #ffffff18;
+    --settings-accent: #dfb66d;
+    --settings-selected: #dfb66d16;
+    --settings-success: #a2c3a6;
+    --settings-danger: #f1a78e;
     width: 100%;
     height: 100vh;
-    background: #f2f2f7;
+    background: var(--settings-bg);
+    color: var(--settings-text);
+    color-scheme: dark;
+    font: 13px/1.5 -apple-system, 'SF Pro Text', system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
 }
 
 .settings-container {
     display: flex;
-    flex-direction: column;
     width: 100%;
-    max-width: 640px;
-    height: 100vh;
-    margin: 0 auto;
-    padding: 24px 20px;
-    background: #f2f2f7;
-    color: #1c1c1e;
-    overflow-y: hidden;
-    font-family: -apple-system, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif;
-    user-select: none;
-    box-sizing: border-box;
+    height: 100%;
 }
 
-.settings-container .settings-header {
+.settings-container button,
+.settings-container input,
+.settings-container select {
+    font: inherit;
+    caret-color: var(--settings-accent);
+}
+
+.settings-container input::placeholder {
+    color: var(--settings-muted);
+    opacity: 1;
+}
+
+.settings-container button {
+    cursor: pointer;
+}
+
+.settings-container button:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.settings-container :is(button, input, select):focus-visible {
+    outline: 2px solid var(--settings-accent);
+    outline-offset: 3px;
+}
+
+.settings-container ::selection {
+    background: #dfb66d44;
+}
+
+.settings-sidebar {
     display: flex;
-    justify-content: center;
-    margin-bottom: 24px;
+    flex-direction: column;
+    flex: 0 0 166px;
+    padding: 24px 12px 16px;
+    background: var(--settings-sidebar);
+    border-right: 1px solid var(--settings-line);
 }
 
-.settings-container .settings-tabs {
-    display: inline-flex;
+.settings-brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 0 5px;
+    margin-bottom: 30px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+}
+
+.settings-brand-mark {
+    display: flex;
+    flex-direction: column;
     gap: 2px;
-    max-width: 100%;
-    padding: 2px;
-    border-radius: 8px;
-    background: rgba(0, 0, 0, 0.08);
-    box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);
-    overflow-x: auto;
-    scrollbar-width: none;
+    width: 22px;
+    flex-shrink: 0;
 }
 
-.settings-container .settings-tabs::-webkit-scrollbar {
-    display: none;
+.settings-brand-mark i {
+    height: 4px;
+    background: #e5b360;
+    border-radius: 2px;
+}
+
+.settings-brand-mark i:first-child {
+    height: 7px;
+    border-radius: 8px 8px 2px 2px;
+}
+
+.settings-brand-mark i:nth-child(2) {
+    background: #97b95e;
+}
+
+.settings-brand-mark i:nth-child(3) {
+    background: #df7159;
+}
+
+.settings-brand-mark i:last-child {
+    border-radius: 2px 2px 5px 5px;
+}
+
+.settings-tabs {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
 }
 
 .settings-container .settings-tab {
-    flex: 0 0 auto;
-    padding: 4px 14px;
-    border: none;
-    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 10px;
+    border: 1px solid transparent;
+    border-radius: 8px;
     background: transparent;
-    font-size: 13px;
-    font-weight: 500;
-    color: rgba(0, 0, 0, 0.6);
-    cursor: default;
-    transition: all 150ms ease;
-    box-sizing: border-box;
-    text-shadow: 0 1px 0 rgba(255,255,255,0.3);
+    color: var(--settings-muted);
+    font-size: 12px;
+    text-align: left;
+    transition: background 120ms ease, color 120ms ease;
+}
+
+.settings-tab svg {
+    width: 17px;
+    height: 17px;
+    flex-shrink: 0;
+}
+
+.settings-container .settings-tab:hover {
+    color: var(--settings-text);
+    background: var(--settings-surface);
 }
 
 .settings-container .settings-tab.active {
-    background: #ffffff;
-    color: #000000;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 1px rgba(0,0,0,0.05);
-    text-shadow: none;
+    color: var(--settings-accent);
+    background: var(--settings-selected);
+    border-color: #dfb66d24;
+    font-weight: 600;
 }
 
-.settings-container .settings-tab:focus-visible,
-.settings-container .segment-btn:focus-visible,
-.settings-container .select-wrapper select:focus-visible,
-.settings-container .mac-number-input input:focus-visible,
-.settings-container .usage-credential-inline-field input:focus-visible,
-.settings-container .mac-btn:focus-visible,
-.settings-container .mac-toggle input:focus-visible + .mac-toggle-slider {
-    outline: none;
-    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.22);
-}
-
-.settings-container .settings-content-wrapper {
+.settings-main {
+    display: flex;
     flex: 1;
-    overflow-y: auto;
-    padding: 0 4px;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    padding: 25px 24px 0;
 }
 
-.settings-container .settings-content {
+.settings-header {
+    padding-bottom: 21px;
+    flex-shrink: 0;
+}
+
+.settings-header h1 {
+    margin: 0 0 5px;
+    font-size: 21px;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+}
+
+.settings-header p {
+    color: var(--settings-muted);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.settings-content-wrapper {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: #77716966 transparent;
+    padding: 3px 3px 20px;
+    margin: -3px -3px 0;
+}
+
+.settings-content {
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    padding-bottom: 20px;
+    gap: 18px;
 }
 
-.settings-container .settings-group {
-    background: #ffffff;
-    border-radius: 10px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-    overflow: hidden;
-    border: 0.5px solid rgba(0, 0, 0, 0.05);
-}
-
-.settings-container .mt-4 {
-    margin-top: 16px;
+.settings-group {
+    border: 1px solid var(--settings-line);
+    border-radius: 12px;
+    background: var(--settings-surface);
 }
 
 .settings-container .setting-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px 16px;
-    min-height: 48px;
-    box-sizing: border-box;
+    gap: 20px;
+    padding: 16px;
+    min-height: 62px;
 }
 
+.settings-container .setting-label,
 .settings-container .setting-row label {
-    font-size: 14px;
-    font-weight: 400;
-    color: #1c1c1e;
-}
-
-.settings-container .setting-label {
-    font-size: 14px;
-    font-weight: 400;
-    color: #1c1c1e;
+    color: var(--settings-text);
+    font-size: 13px;
 }
 
 .settings-container .setting-copy {
     display: flex;
     flex-direction: column;
-    gap: 3px;
     min-width: 0;
+    gap: 4px;
 }
 
-.settings-container .setting-hint {
-    max-width: 360px;
-    font-size: 12px;
-    line-height: 1.35;
-    color: rgba(0, 0, 0, 0.46);
+.settings-container .setting-hint,
+.settings-container .agent-status {
+    color: var(--settings-muted);
+    font-size: 11px;
+    line-height: 1.6;
 }
 
 .settings-container .setting-divider {
     height: 1px;
-    background: rgba(0, 0, 0, 0.05);
-    margin-left: 16px;
+    margin: 0 16px;
+    background: var(--settings-line);
 }
 
-/* Theme Picker */
+.settings-container .setting-row + .setting-row {
+    border-top: 1px solid var(--settings-line);
+}
+
+.settings-container .theme-setting-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+}
+
 .settings-container .theme-picker {
-    display: flex;
-    gap: 8px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
 }
 
 .settings-container .theme-option {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    padding: 6px 10px;
-    border: 1.5px solid rgba(0, 0, 0, 0.08);
-    border-radius: 8px;
-    background: transparent;
-    cursor: default;
-    transition: all 150ms ease;
+    gap: 10px;
+    padding: 15px 10px 9px;
+    border: 1px solid var(--settings-line);
+    border-radius: 9px;
+    background: var(--settings-bg);
+    color: var(--settings-muted);
+    transition: background 120ms ease, border-color 120ms ease;
+}
+
+.settings-container .theme-option:hover {
+    border-color: var(--settings-muted);
 }
 
 .settings-container .theme-option.active {
-    border-color: #007aff;
-    background: rgba(0, 122, 255, 0.06);
+    border-color: var(--settings-accent);
+    background: var(--settings-selected);
+    color: var(--settings-accent);
 }
 
 .settings-container .theme-swatches {
     display: flex;
-    gap: 4px;
+    flex-direction: column;
+    gap: 3px;
+    width: 58px;
 }
 
 .settings-container .theme-dot {
-    width: 12px;
+    height: 6px;
+    border-radius: 3px;
+}
+
+.settings-container .theme-dot:first-child {
     height: 12px;
-    border-radius: 50%;
-    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+    border-radius: 60% 60% 3px 3px / 100% 100% 3px 3px;
 }
 
-/* Select */
+.settings-container .theme-dot:last-child {
+    height: 9px;
+    border-radius: 3px 3px 8px 8px;
+}
+
+.settings-container .theme-name {
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.settings-container .select-wrapper select,
+.settings-container .mac-number-input input,
+.settings-container .usage-credential-inline-field input {
+    min-height: 30px;
+    padding: 5px 9px;
+    border: 1px solid var(--settings-line);
+    border-radius: 7px;
+    background: var(--settings-bg);
+    color: var(--settings-text);
+    font-size: 12px;
+}
+
+.settings-container .select-wrapper {
+    flex-shrink: 0;
+}
+
 .settings-container .select-wrapper select {
-    appearance: none;
-    padding: 4px 28px 4px 12px;
-    border: 1px solid rgba(0, 0, 0, 0.1);
-    border-radius: 6px;
-    background: #ffffff url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='rgba(0,0,0,0.5)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E") no-repeat right 8px center;
-    font-size: 13px;
-    color: #1c1c1e;
-    outline: none;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.02);
-    cursor: default;
-}
-.settings-container .select-wrapper select:active {
-    background-color: rgba(0,0,0,0.02);
+    min-width: 125px;
+    cursor: pointer;
 }
 
-/* Segmented Control Inside Rows */
 .settings-container .segmented-control {
     display: inline-flex;
-    gap: 1px;
+    flex-shrink: 0;
+    gap: 2px;
     padding: 2px;
-    border-radius: 6px;
-    background: rgba(0, 0, 0, 0.08);
+    border: 1px solid var(--settings-line);
+    border-radius: 8px;
+    background: var(--settings-bg);
 }
 
 .settings-container .segment-btn {
     padding: 4px 12px;
-    border: none;
-    border-radius: 4px;
+    border: 0;
+    border-radius: 5px;
     background: transparent;
-    font-size: 12px;
-    font-weight: 500;
-    color: rgba(0, 0, 0, 0.6);
-    cursor: default;
-    transition: all 150ms ease;
+    color: var(--settings-muted);
+    font-size: 11px;
 }
 
 .settings-container .segment-btn.active {
-    background: #ffffff;
-    color: #000000;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-}
-
-/* Agent Rows */
-.settings-container .agent-row.unavailable {
-    opacity: 0.6;
-}
-
-.settings-container .usage-menu-bar-row {
-    min-height: 44px;
-    padding-top: 8px;
-    padding-bottom: 12px;
-    background: rgba(0, 0, 0, 0.02);
+    background: var(--settings-control);
+    color: var(--settings-text);
+    box-shadow: inset 0 1px 0 #ffffff0a;
 }
 
 .settings-container .agent-info {
     display: flex;
     flex-direction: column;
     gap: 4px;
+    min-width: 0;
 }
 
 .settings-container .agent-name-row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
 }
 
 .settings-container .agent-name {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 500;
-    color: #1c1c1e;
+    overflow-wrap: anywhere;
 }
 
-.settings-container .agent-source-badge {
-    font-size: 10px;
-    padding: 2px 6px;
+.settings-container .agent-source-badge,
+.settings-container .usage-provider-status-badge {
+    padding: 1px 6px;
     border-radius: 4px;
-    background: rgba(0, 0, 0, 0.05);
-    color: rgba(0, 0, 0, 0.5);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
-}
-
-.settings-container .agent-status {
-    font-size: 12px;
-    color: rgba(0, 0, 0, 0.5);
-}
-
-/* Account Usage */
-.settings-container .usage-provider-compact-list {
-    background: #ffffff;
+    background: var(--settings-control);
+    color: var(--settings-muted);
+    font-size: 10px;
 }
 
 .settings-container .usage-provider-compact-header,
 .settings-container .usage-provider-compact-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 82px 82px;
+    grid-template-columns: minmax(0, 1fr) 70px 70px;
     align-items: center;
+    gap: 5px;
+    padding: 12px 16px;
 }
 
 .settings-container .usage-provider-compact-header {
-    padding: 9px 16px 6px;
-    font-size: 11px;
-    font-weight: 600;
-    color: rgba(0, 0, 0, 0.42);
+    padding-bottom: 4px;
+    color: var(--settings-muted);
+    font-size: 10px;
 }
 
 .settings-container .usage-provider-compact-header span:not(:first-child) {
     text-align: center;
-}
-
-.settings-container .usage-provider-compact-row {
-    min-height: 58px;
-    padding: 9px 16px;
-    box-sizing: border-box;
-}
-
-.settings-container .usage-provider-compact-row.enabled {
-    background: rgba(52, 199, 89, 0.045);
 }
 
 .settings-container .usage-provider-identity {
@@ -306,34 +397,25 @@
 }
 
 .settings-container .usage-provider-avatar {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+    display: grid;
+    place-items: center;
     width: 30px;
     height: 30px;
-    flex: 0 0 30px;
+    flex-shrink: 0;
+    border: 1px solid var(--settings-line);
     border-radius: 8px;
-    background: rgba(0, 0, 0, 0.06);
-    color: rgba(0, 0, 0, 0.72);
-    font-size: 12px;
-    font-weight: 700;
-}
-
-.settings-container .usage-provider-avatar.provider-github-copilot {
-    background: rgba(0, 0, 0, 0.055);
+    background: var(--settings-bg);
 }
 
 .settings-container .usage-provider-avatar img {
-    display: block;
     width: 18px;
     height: 18px;
     object-fit: contain;
-    opacity: 0.78;
+    filter: invert(1);
 }
 
-.settings-container .usage-provider-avatar.provider-codex img {
-    width: 19px;
-    height: 19px;
+.settings-container .usage-provider-avatar.provider-claude-code img {
+    filter: none;
 }
 
 .settings-container .usage-provider-title-stack {
@@ -346,40 +428,26 @@
 .settings-container .usage-provider-title-line {
     display: flex;
     align-items: center;
-    gap: 7px;
+    flex-wrap: wrap;
+    gap: 5px 7px;
     min-width: 0;
 }
 
 .settings-container .usage-provider-compact-name {
-    overflow: hidden;
-    color: #1c1c1e;
-    font-size: 14px;
-    font-weight: 600;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.settings-container .usage-provider-status-badge {
-    padding: 2px 6px;
-    border-radius: 999px;
-    background: rgba(0, 0, 0, 0.05);
-    color: rgba(0, 0, 0, 0.52);
-    font-size: 10px;
-    font-weight: 600;
-    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 500;
+    overflow-wrap: anywhere;
 }
 
 .settings-container .usage-provider-status-badge.enabled {
-    background: rgba(52, 199, 89, 0.14);
-    color: #1b7f38;
+    background: #86aa8b18;
+    color: var(--settings-success);
 }
 
 .settings-container .usage-provider-compact-hint {
-    overflow: hidden;
-    color: rgba(0, 0, 0, 0.44);
-    font-size: 11px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    color: var(--settings-muted);
+    font-size: 10px;
+    overflow-wrap: anywhere;
 }
 
 .settings-container .usage-provider-switch-cell {
@@ -387,121 +455,105 @@
     display: flex;
     justify-content: center;
     min-width: 0;
+    cursor: pointer;
 }
 
-.settings-container .usage-provider-switch-cell input {
+.settings-container .usage-provider-switch-cell input,
+.settings-container .mac-toggle input {
     position: absolute;
+    width: 100%;
+    height: 100%;
+    inset: 0;
+    margin: 0;
     opacity: 0;
-    pointer-events: none;
+    cursor: pointer;
 }
 
 .settings-container .usage-provider-checkmark {
     display: inline-flex;
     width: 34px;
     height: 22px;
-    border-radius: 11px;
-    background: rgba(120, 120, 128, 0.18);
-    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06);
-    transition: background 180ms ease;
+    border-radius: 12px;
+    background: var(--settings-control);
+    border: 1px solid #ffffff18;
+    pointer-events: none;
+    transition: background 150ms ease;
 }
 
 .settings-container .usage-provider-checkmark::before {
     content: '';
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     margin: 2px;
     border-radius: 50%;
-    background: #ffffff;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
-    transition: transform 180ms ease;
+    background: #f4f0e8;
+    box-shadow: 0 1px 2px #0003;
+    transition: transform 150ms ease;
 }
 
-.settings-container .usage-provider-switch-cell input:checked + .usage-provider-checkmark {
-    background: #34c759;
+.settings-container .usage-provider-switch-cell input:checked + .usage-provider-checkmark,
+.settings-container .mac-toggle input:checked + .mac-toggle-slider {
+    background: #789c7d;
 }
 
 .settings-container .usage-provider-switch-cell input:checked + .usage-provider-checkmark::before {
     transform: translateX(12px);
 }
 
-.settings-container .usage-provider-switch-cell input:focus-visible + .usage-provider-checkmark {
-    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.22), inset 0 1px 2px rgba(0, 0, 0, 0.06);
+.settings-container .usage-provider-switch-cell input:focus-visible + .usage-provider-checkmark,
+.settings-container .mac-toggle input:focus-visible + .mac-toggle-slider {
+    outline: 2px solid var(--settings-accent);
+    outline-offset: 3px;
 }
 
 .settings-container .usage-provider-switch-cell.disabled {
-    opacity: 0.44;
+    opacity: 0.5;
+    cursor: default;
 }
 
 .settings-container .usage-credential-inline-form {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     align-items: end;
-    padding: 0 16px 12px 56px;
+    padding: 0 16px 14px 56px;
 }
 
 .settings-container .usage-credential-inline-fields {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 8px;
-    min-width: 0;
+    width: 100%;
 }
 
 .settings-container .usage-credential-inline-field {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 5px;
     min-width: 0;
-    color: rgba(0, 0, 0, 0.52);
+    color: var(--settings-muted);
     font-size: 11px;
 }
 
 .settings-container .usage-credential-inline-field input {
     width: 100%;
-    box-sizing: border-box;
-    padding: 6px 8px;
-    border: 1px solid rgba(0, 0, 0, 0.1);
-    border-radius: 7px;
-    background: #ffffff;
-    color: #1c1c1e;
-    font-size: 13px;
-    outline: none;
 }
 
-@media (max-width: 560px) {
-    .settings-container .usage-provider-compact-header,
-    .settings-container .usage-provider-compact-row {
-        grid-template-columns: minmax(0, 1fr) 62px 62px;
-    }
-
-    .settings-container .usage-credential-inline-form {
-        grid-template-columns: 1fr;
-        padding-left: 16px;
-    }
-}
-
-/* Mac Toggle */
 .settings-container .mac-toggle {
     position: relative;
     width: 38px;
     height: 22px;
-    display: inline-block;
-}
-
-.settings-container .mac-toggle input {
-    opacity: 0;
-    width: 0;
-    height: 0;
+    flex-shrink: 0;
 }
 
 .settings-container .mac-toggle-slider {
     position: absolute;
     inset: 0;
-    border-radius: 11px;
-    background: rgba(120, 120, 128, 0.16);
-    cursor: default;
-    transition: background 250ms cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
+    border-radius: 12px;
+    border: 1px solid #ffffff18;
+    background: var(--settings-control);
+    pointer-events: none;
+    transition: background 150ms ease;
 }
 
 .settings-container .mac-toggle-slider::before {
@@ -509,147 +561,112 @@
     position: absolute;
     top: 2px;
     left: 2px;
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     border-radius: 50%;
-    background: #ffffff;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2), 0 0 1px rgba(0,0,0,0.1);
-    transition: transform 250ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.settings-container .mac-toggle input:checked + .mac-toggle-slider {
-    background: #34c759;
+    background: #f4f0e8;
+    box-shadow: 0 1px 2px #0003;
+    transition: transform 150ms ease;
 }
 
 .settings-container .mac-toggle input:checked + .mac-toggle-slider::before {
     transform: translateX(16px);
 }
+
 .settings-container .mac-toggle input:disabled + .mac-toggle-slider {
     opacity: 0.5;
 }
 
-/* Number Input */
-.settings-container .mac-number-input {
+.settings-container .mac-toggle input:disabled,
+.settings-container .usage-provider-switch-cell input:disabled {
+    cursor: default;
+}
+
+.settings-container .mac-number-input,
+.settings-container .action-buttons {
     display: flex;
     align-items: center;
-    gap: 6px;
+    flex-shrink: 0;
+    gap: 8px;
 }
 
 .settings-container .mac-number-input input {
     width: 72px;
-    min-width: 72px;
-    padding: 4px 8px;
-    border: 1px solid rgba(0, 0, 0, 0.1);
-    border-radius: 6px;
-    font-size: 13px;
     text-align: center;
-    background: #ffffff;
-    color: #1c1c1e;
-    outline: none;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.02);
 }
 
-.settings-container .mac-number-input .suffix {
-    font-size: 13px;
-    color: rgba(0, 0, 0, 0.5);
-}
-
-/* Actions */
-.settings-container .action-buttons {
-    display: flex;
-    gap: 8px;
+.settings-container .suffix {
+    color: var(--settings-muted);
+    font-size: 12px;
 }
 
 .settings-container .mac-btn {
-    padding: 4px 12px;
-    border: 1px solid rgba(0, 0, 0, 0.1);
-    border-radius: 6px;
-    background: #ffffff;
-    font-size: 13px;
-    font-weight: 500;
-    color: #1c1c1e;
-    cursor: default;
-    transition: all 150ms ease;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+    flex-shrink: 0;
+    min-height: 30px;
+    padding: 5px 12px;
+    border: 1px solid var(--settings-line);
+    border-radius: 7px;
+    background: var(--settings-control);
+    color: var(--settings-text);
+    font-size: 12px;
+    white-space: nowrap;
+    transition: border-color 120ms ease;
 }
 
-.settings-container .mac-btn:active {
-    background: rgba(0, 0, 0, 0.02);
+.settings-container .mac-btn:hover:not(:disabled) {
+    border-color: var(--settings-muted);
 }
 
-.settings-container .mac-btn:disabled {
-    opacity: 0.55;
-}
-
-.settings-container .mac-btn.danger-text {
-    color: #ff3b30;
+.settings-container .danger-text,
+.settings-container .confirm-text,
+.settings-container .about-error-text,
+.settings-container .settings-feedback.error {
+    color: var(--settings-danger);
 }
 
 .settings-container .confirm-row {
-    background: rgba(255, 59, 48, 0.05);
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 14px;
+    background: #df715909;
+    border-radius: inherit;
 }
 
 .settings-container .confirm-text {
-    font-size: 13px;
-    color: #ff3b30;
-    font-weight: 500;
+    font-size: 12px;
+    line-height: 1.6;
 }
 
 .settings-container .settings-footer {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    margin-top: 16px;
     flex-wrap: wrap;
-}
-
-.settings-container .platform-badge,
-.settings-container .dev-mode-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.settings-container .footer-label,
-.settings-container .footer-value,
-.settings-container .dev-mode-badge {
+    gap: 5px 8px;
+    margin-top: auto;
+    padding: 20px 8px 0;
+    color: var(--settings-muted);
     font-size: 10px;
-    font-weight: 500;
-    letter-spacing: 0.06em;
-}
-
-.settings-container .footer-label {
-    color: rgba(0, 0, 0, 0.34);
-    text-transform: uppercase;
-}
-
-.settings-container .footer-value {
-    color: rgba(0, 0, 0, 0.56);
 }
 
 .settings-container .dev-mode-badge {
-    color: rgba(0, 0, 0, 0.26);
-    text-align: center;
+    border: 1px solid var(--settings-line);
+    border-radius: 4px;
+    padding: 0 4px;
+    font-size: 9px;
 }
 
-/* Dark Mode */
-
-/* About Tab */
-.settings-container .setting-value {
-    font-size: 13px;
-    color: rgba(0, 0, 0, 0.5);
-    font-weight: 500;
+.settings-container .setting-value,
+.settings-container .about-status-text {
+    color: var(--settings-muted);
+    font-size: 12px;
 }
 
 .settings-container .about-link {
-    font-size: 13px;
-    font-weight: 500;
-    color: #007aff;
+    border: 0;
     background: none;
-    border: none;
-    cursor: default;
-    padding: 0;
+    color: var(--settings-accent);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+    text-underline-offset: 3px;
 }
 
 .settings-container .about-link:hover {
@@ -662,300 +679,139 @@
     gap: 10px;
 }
 
-.settings-container .about-update-available {
-    flex-direction: row;
-    align-items: center;
-}
-
-.settings-container .about-update-btn {
-    width: 100%;
-    text-align: center;
-    padding: 8px 12px;
-}
-
-.settings-container .about-primary-btn {
-    background: #007aff;
-    color: #ffffff;
-    border-color: #007aff;
-}
-
-.settings-container .about-primary-btn:active {
-    background: #0066d6;
-}
-
-.settings-container .about-status-text {
-    font-size: 13px;
-    font-weight: 500;
-    color: rgba(0, 0, 0, 0.6);
-}
-
-.settings-container .about-success {
-    color: #34c759;
-}
-
+.settings-container .about-update-available,
 .settings-container .about-error-row {
     flex-direction: row;
     align-items: center;
+    flex-wrap: wrap;
+}
+
+.settings-container .about-update-btn {
+    align-self: flex-start;
+}
+
+.settings-container .about-primary-btn {
+    background: var(--settings-accent);
+    border-color: var(--settings-accent);
+    color: var(--settings-bg);
+}
+
+.settings-container .about-success {
+    color: var(--settings-success);
 }
 
 .settings-container .about-error-text {
-    color: #ff3b30;
     flex: 1;
     font-size: 12px;
-    line-height: 1.4;
-    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .settings-container .about-progress-bar {
-    width: 100%;
-    height: 4px;
-    border-radius: 2px;
-    background: rgba(0, 0, 0, 0.08);
+    height: 5px;
+    border-radius: 4px;
     overflow: hidden;
+    background: var(--settings-control);
 }
 
 .settings-container .about-progress-fill {
+    width: 100%;
     height: 100%;
-    border-radius: 2px;
-    background: #007aff;
-    transition: width 200ms ease;
+    transform-origin: left;
+    background: var(--settings-accent);
+    transition: transform 200ms ease;
 }
 
-/* Dark Mode */
-@media (prefers-color-scheme: dark) {
+.settings-container .settings-feedback {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    color: var(--settings-muted);
+    font-size: 12px;
+}
+
+@media (prefers-color-scheme: light) {
     .settings-shell {
-        background: #1c1c1e;
-    }
-
-    .settings-container {
-        background: #1c1c1e;
-        color: #ffffff;
-    }
-
-    .settings-container .settings-tabs {
-        background: rgba(255, 255, 255, 0.1);
-        box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);
-    }
-
-    .settings-container .settings-tab {
-        color: rgba(255, 255, 255, 0.6);
-        text-shadow: 0 1px 0 rgba(0,0,0,0.3);
-    }
-
-    .settings-container .settings-tab.active {
-        background: #636366;
-        color: #ffffff;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-        text-shadow: none;
-    }
-
-    .settings-container .settings-group {
-        background: rgba(255, 255, 255, 0.06);
-        border: 0.5px solid rgba(255, 255, 255, 0.08);
-        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-    }
-
-    .settings-container .setting-row label,
-    .settings-container .setting-label,
-    .settings-container .agent-name {
-        color: #ffffff;
-    }
-
-    .settings-container .setting-divider {
-        background: rgba(255, 255, 255, 0.08);
-    }
-
-    .settings-container .theme-option {
-        border-color: rgba(255, 255, 255, 0.1);
-    }
-
-    .settings-container .theme-option.active {
-        border-color: #0a84ff;
-        background: rgba(10, 132, 255, 0.12);
-    }
-
-    .settings-container .select-wrapper select {
-        background-color: rgba(255, 255, 255, 0.1);
-        border-color: rgba(255, 255, 255, 0.1);
-        color: #ffffff;
-        background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.6)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-    }
-    .settings-container .select-wrapper select:active {
-        background-color: rgba(255,255,255,0.15);
-    }
-
-    .settings-container .segmented-control {
-        background: rgba(255, 255, 255, 0.1);
-    }
-
-    .settings-container .segment-btn {
-        color: rgba(255, 255, 255, 0.6);
-    }
-
-    .settings-container .segment-btn.active {
-        background: #636366;
-        color: #ffffff;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-    }
-
-    .settings-container .agent-source-badge {
-        background: rgba(255, 255, 255, 0.1);
-        color: rgba(255, 255, 255, 0.6);
-    }
-
-    .settings-container .agent-status,
-    .settings-container .setting-hint,
-    .settings-container .mac-number-input .suffix {
-        color: rgba(255, 255, 255, 0.5);
-    }
-
-    .settings-container .usage-provider-compact-list {
-        background: rgba(255, 255, 255, 0.06);
-    }
-
-    .settings-container .usage-provider-compact-header {
-        color: rgba(255, 255, 255, 0.42);
-    }
-
-    .settings-container .usage-provider-compact-row.enabled {
-        background: rgba(48, 209, 88, 0.055);
-    }
-
-    .settings-container .usage-provider-avatar {
-        background: rgba(255, 255, 255, 0.12);
-        color: rgba(255, 255, 255, 0.78);
-    }
-
-    .settings-container .usage-provider-avatar.provider-github-copilot {
-        background: rgba(255, 255, 255, 0.12);
+        --settings-bg: #faf8f3;
+        --settings-sidebar: #f0ece3;
+        --settings-surface: #fffdf8;
+        --settings-control: #eae5db;
+        --settings-text: #302a22;
+        --settings-muted: #71685b;
+        --settings-line: #3a2c191c;
+        --settings-accent: #805d24;
+        --settings-selected: #dfb66d25;
+        --settings-success: #3c6845;
+        --settings-danger: #a64127;
+        color-scheme: light;
     }
 
     .settings-container .usage-provider-avatar img {
-        filter: invert(1);
-        opacity: 0.86;
-    }
-
-    .settings-container .usage-provider-avatar.provider-claude-code img {
         filter: none;
-        opacity: 0.92;
     }
 
-    .settings-container .usage-provider-compact-name {
-        color: #ffffff;
-    }
-
-    .settings-container .usage-provider-status-badge {
-        background: rgba(255, 255, 255, 0.1);
-        color: rgba(255, 255, 255, 0.58);
-    }
-
-    .settings-container .usage-provider-status-badge.enabled {
-        background: rgba(48, 209, 88, 0.16);
-        color: #6ee78a;
-    }
-
-    .settings-container .usage-provider-compact-hint,
-    .settings-container .usage-credential-inline-field {
-        color: rgba(255, 255, 255, 0.48);
-    }
-
-    .settings-container .usage-provider-checkmark {
-        background: rgba(255, 255, 255, 0.15);
-    }
-
-    .settings-container .usage-provider-checkmark::before {
-        background: #e5e5ea;
-    }
-
-    .settings-container .usage-credential-inline-field input {
-        border-color: rgba(255, 255, 255, 0.1);
-        background: rgba(255, 255, 255, 0.1);
-        color: #ffffff;
-    }
-
+    .settings-container .usage-provider-checkmark,
     .settings-container .mac-toggle-slider {
-        background: rgba(255, 255, 255, 0.15);
+        border-color: #3a2c1926;
+    }
+}
+
+@media (max-width: 620px) {
+    .settings-container {
+        flex-direction: column;
     }
 
-    .settings-container .mac-toggle-slider::before {
-        background: #e5e5ea;
+    .settings-sidebar {
+        flex: 0 0 auto;
+        padding: 12px 16px 8px;
+        border-right: 0;
+        border-bottom: 1px solid var(--settings-line);
     }
 
-    .settings-container .mac-number-input input {
-        background: rgba(255, 255, 255, 0.1);
-        border-color: rgba(255, 255, 255, 0.1);
-        color: #ffffff;
+    .settings-brand {
+        margin-bottom: 12px;
     }
 
-    .settings-container .mac-btn {
-        background: rgba(255, 255, 255, 0.1);
-        border-color: rgba(255, 255, 255, 0.1);
-        color: #ffffff;
+    .settings-tabs {
+        flex-direction: row;
+        gap: 3px;
+        overflow-x: auto;
+        padding: 3px 0;
+        scrollbar-width: thin;
+        scrollbar-color: #77716966 transparent;
     }
 
-    .settings-container .mac-btn:active {
-        background: rgba(255, 255, 255, 0.15);
+    .settings-container .settings-tab {
+        flex-shrink: 0;
+        padding: 7px 8px;
+        gap: 6px;
     }
 
-    .settings-container .mac-btn.danger-text {
-        color: #ff453a;
+    .settings-tab svg {
+        width: 15px;
+        height: 15px;
     }
 
-    .settings-container .confirm-row {
-        background: rgba(255, 69, 58, 0.1);
+    .settings-container .settings-footer {
+        display: none;
     }
 
-    .settings-container .confirm-text {
-        color: #ff453a;
+    .settings-main {
+        padding: 18px 18px 0;
     }
 
-    .settings-container .footer-label {
-        color: rgba(255, 255, 255, 0.3);
+    .settings-header {
+        padding-bottom: 16px;
     }
 
-    .settings-container .footer-value {
-        color: rgba(255, 255, 255, 0.5);
+    .settings-container .usage-credential-inline-form {
+        padding-left: 16px;
     }
+}
 
-    .settings-container .dev-mode-badge {
-        color: rgba(255, 255, 255, 0.2);
-    }
-
-    .settings-container .setting-value {
-        color: rgba(255, 255, 255, 0.5);
-    }
-
-    .settings-container .about-link {
-        color: #0a84ff;
-    }
-
-    .settings-container .about-status-text {
-        color: rgba(255, 255, 255, 0.6);
-    }
-
-    .settings-container .about-success {
-        color: #30d158;
-    }
-
-    .settings-container .about-error-text {
-        color: #ff453a;
-    }
-
-    .settings-container .about-progress-bar {
-        background: rgba(255, 255, 255, 0.1);
-    }
-
-    .settings-container .about-progress-fill {
-        background: #0a84ff;
-    }
-
-    .settings-container .about-primary-btn {
-        background: #0a84ff;
-        border-color: #0a84ff;
-        color: #ffffff;
-    }
-
-    .settings-container .about-primary-btn:active {
-        background: #0070e0;
+@media (prefers-reduced-motion: reduce) {
+    .settings-container *,
+    .settings-container *::before {
+        transition: none !important;
     }
 }

@@ -88,6 +88,7 @@ export function useAccountUsage() {
             setProviderErrors({});
         } catch (err) {
             console.error('Failed to refresh all:', err);
+            setProviderErrors(Object.fromEntries(providers.filter(provider => provider.enabled).map(provider => [provider.id, String(err)])));
         } finally {
             setRefreshing(false);
         }

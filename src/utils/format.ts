@@ -2,9 +2,15 @@
  * 格式化 token 数量
  *
  * @param count 原始 token 数量
- * @returns K/M 保留一位小数，B 保留四位有效数字的展示文本
+ * @param compact 是否使用最多两位小数并移除尾零的紧凑格式
+ * @returns K/M/B 展示文本，默认保留既有精度
  */
-export function formatTokenCount(count: number): string {
+export function formatTokenCount(count: number, compact = false): string {
+    if (compact && count >= 1_000) {
+        const divisor = count >= 1_000_000_000 ? 1_000_000_000 : count >= 1_000_000 ? 1_000_000 : 1_000;
+        const unit = divisor === 1_000_000_000 ? 'B' : divisor === 1_000_000 ? 'M' : 'K';
+        return `${Number((count / divisor).toFixed(2))}${unit}`;
+    }
     if (count >= 1_000_000_000) {
         const value = count / 1_000_000_000;
         const precision = value < 10 ? 3 : value < 100 ? 2 : value < 1_000 ? 1 : 0;

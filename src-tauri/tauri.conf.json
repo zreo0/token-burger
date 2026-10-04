@@ -19,8 +19,10 @@
                 "label": "settings",
                 "title": "TokenBurger Settings",
                 "url": "index.html#/settings",
-                "width": 600,
-                "height": 400,
+                "width": 720,
+                "height": 540,
+                "minWidth": 560,
+                "minHeight": 400,
                 "resizable": true,
                 "decorations": true,
                 "visible": false

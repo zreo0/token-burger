@@ -2,13 +2,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import Burger from '..';
-import {
-    BREAD_HEIGHT,
-    CACHE_MAX_HEIGHT,
-    CACHE_MIN_HEIGHT,
-    getCacheLayerHeight,
-    getLayerSpringConfig,
-} from '../BurgerLayer';
+import { getLayerSpringConfig } from '../BurgerLayer';
 
 vi.mock('react-i18next', () => ({
     useTranslation: () => ({
@@ -34,6 +28,7 @@ vi.mock('framer-motion', async () => {
         },
         LayoutGroup: ({ children }: { children: React.ReactNode }) => ReactModule.createElement(ReactModule.Fragment, null, children),
         AnimatePresence: ({ children }: { children: React.ReactNode }) => ReactModule.createElement(ReactModule.Fragment, null, children),
+        useReducedMotion: () => true,
         useSpring: (value: number) => ({
             get: () => value,
             set: () => {},
@@ -56,14 +51,6 @@ vi.mock('framer-motion', async () => {
 });
 
 describe('BurgerLayer helpers', () => {
-    it('对缓存层高度应用非线性上下限', () => {
-        expect(getCacheLayerHeight(0, 1000)).toBe(CACHE_MIN_HEIGHT);
-        expect(getCacheLayerHeight(1000, 1000)).toBe(CACHE_MAX_HEIGHT);
-        expect(getCacheLayerHeight(50, 1000)).toBeGreaterThan(CACHE_MIN_HEIGHT);
-        expect(getCacheLayerHeight(50, 1000)).toBeLessThan(CACHE_MAX_HEIGHT);
-        expect(BREAD_HEIGHT).toBeGreaterThan(CACHE_MIN_HEIGHT);
-    });
-
     it('为 today 与范围切换返回不同弹簧配置', () => {
         const today = getLayerSpringConfig('today');
         const week = getLayerSpringConfig('7d');

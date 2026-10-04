@@ -257,6 +257,106 @@ fn get_token_summary_filtered(
     })
 }
 
+/**
+ * 从统计库按小时或连续 24 小时聚合，参数为范围、启用 Agent 和查询时刻
+ * 返回补零后的趋势与上一等长周期；不读取 Agent 原始数据源
+ */
+pub fn get_token_trend_for_agents(
+    conn: &Connection,
+    range: &str,
+    enabled_agents: &[String],
+    now: &str,
+) -> Result<crate::types::TokenTrend, rusqlite::Error> {
+    use crate::types::{TokenBreakdown, TokenTrend, TokenTrendBucket};
+
+    let end: i64 = conn.query_row("SELECT unixepoch(?1)", [now], |row| row.get(0))?;
+    let (start, previous_start, previous_end, step) = match range {
+        "7d" | "30d" => {
+            let duration = if range == "7d" { 7 * 86400 } else { 30 * 86400 };
+            (end - duration, end - duration * 2, end - duration, 86400)
+        }
+        _ => {
+            let (start, previous_start, previous_end) = conn.query_row(
+                "SELECT unixepoch(?1, 'localtime', 'start of day', 'utc'),
+                        unixepoch(?1, 'localtime', 'start of day', '-1 day', 'utc'),
+                        unixepoch(?1, 'localtime', '-1 day', 'utc')",
+                [now],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )?;
+            (start, previous_start, previous_end, 3600)
+        }
+    };
+    let mut result = TokenTrend {
+        buckets: (start..end.max(start + 1))
+            .step_by(step as usize)
+            .map(|time| TokenTrendBucket {
+                start: time,
+                end: (time + step).min(end),
+                by_model: HashMap::new(),
+            })
+            .collect(),
+        previous_by_model: HashMap::new(),
+        comparison_available: false,
+    };
+    let agent_filter = build_agent_filter(Some(enabled_agents));
+    // Unix 时间比较能正确处理日志中不同的 RFC3339 时区偏移
+    let sql = format!(
+        "SELECT CASE WHEN unixepoch(timestamp) >= {start}
+                     THEN CAST((unixepoch(timestamp) - {start}) / {step} AS INTEGER)
+                     ELSE -1 END AS bucket,
+                model_id, token_type, SUM(token_count), COALESCE(SUM(cost), 0.0)
+         FROM token_logs
+         WHERE ((unixepoch(timestamp) >= {start} AND unixepoch(timestamp) <= {end})
+             OR (unixepoch(timestamp) >= {previous_start} AND unixepoch(timestamp) < {previous_end}))
+             {agent_filter}
+         GROUP BY bucket, model_id, token_type"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(
+        params_from_iter(agent_params(Some(enabled_agents))),
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, f64>(4)?,
+            ))
+        },
+    )?;
+    for row in rows {
+        let (bucket, model, token_type, count, cost) = row?;
+        let models = if bucket < 0 {
+            &mut result.previous_by_model
+        } else {
+            // 最后一个边界时刻归入末桶，避免多出一个零宽度时间桶
+            let index = (bucket as usize).min(result.buckets.len() - 1);
+            &mut result.buckets[index].by_model
+        };
+        let entry: &mut TokenBreakdown = models.entry(model).or_default();
+        entry.agent_cost += cost;
+        match token_type.as_str() {
+            "input" => entry.input += count,
+            "cache_create" => entry.cache_create += count,
+            "cache_read" => entry.cache_read += count,
+            "output" => entry.output += count,
+            _ => {}
+        }
+    }
+    result.comparison_available = conn.query_row(
+        &format!("SELECT EXISTS(SELECT 1 FROM token_logs WHERE unixepoch(timestamp) <= {previous_start}{agent_filter})"),
+        params_from_iter(agent_params(Some(enabled_agents))),
+        |row| row.get(0),
+    )?;
+    Ok(result)
+}
+
 /// 获取指定时间范围内 agent 自带 cost 的汇总
 #[cfg(test)]
 pub fn get_agent_cost_summary(conn: &Connection, range: &str) -> Result<f64, rusqlite::Error> {
@@ -531,6 +631,129 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(crate::db::SCHEMA_SQL).unwrap();
         conn
+    }
+
+    /**
+     * 验证今日趋势的时区归桶、同期截止、补零及启用 Agent 过滤
+     */
+    #[test]
+    fn token_trend_today_matches_elapsed_previous_day() {
+        let conn = setup_db();
+        let now = Local.with_ymd_and_hms(2026, 10, 5, 12, 30, 0).unwrap();
+        let start = now
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_local_timezone(Local)
+            .unwrap();
+        let previous_start = start - Duration::days(1);
+        let logs = [
+            make_log_at(
+                "codex",
+                "model",
+                TokenType::Input,
+                10,
+                "prior-start",
+                previous_start.to_rfc3339(),
+            ),
+            make_log_at(
+                "codex",
+                "model",
+                TokenType::Output,
+                20,
+                "prior-before",
+                (now - Duration::days(1) - Duration::seconds(1)).to_rfc3339(),
+            ),
+            make_log_at(
+                "codex",
+                "model",
+                TokenType::Input,
+                999,
+                "prior-after",
+                (now - Duration::days(1) + Duration::seconds(1)).to_rfc3339(),
+            ),
+            make_log_at(
+                "codex",
+                "model",
+                TokenType::CacheRead,
+                100,
+                "current",
+                (start + Duration::hours(2))
+                    .with_timezone(&Utc)
+                    .to_rfc3339(),
+            ),
+            make_log_at(
+                "codex",
+                "model",
+                TokenType::Output,
+                50,
+                "now",
+                now.to_rfc3339(),
+            ),
+            make_log_at(
+                "codex",
+                "model",
+                TokenType::Output,
+                999,
+                "future",
+                (now + Duration::seconds(1)).to_rfc3339(),
+            ),
+            make_log_at(
+                "disabled",
+                "model",
+                TokenType::Input,
+                999,
+                "disabled",
+                start.to_rfc3339(),
+            ),
+        ];
+        batch_insert_token_logs(&conn, &logs).unwrap();
+        let result =
+            get_token_trend_for_agents(&conn, "today", &["codex".into()], &now.to_rfc3339())
+                .unwrap();
+        assert_eq!(result.buckets.len(), 13);
+        assert!(result.buckets[0].by_model.is_empty());
+        assert_eq!(result.buckets[2].by_model["model"].cache_read, 100);
+        assert_eq!(result.buckets[12].by_model["model"].output, 50);
+        assert_eq!(result.previous_by_model["model"].input, 10);
+        assert_eq!(result.previous_by_model["model"].output, 20);
+        assert!(result.comparison_available);
+        let empty = get_token_trend_for_agents(&conn, "today", &[], &now.to_rfc3339()).unwrap();
+        assert!(empty
+            .buckets
+            .iter()
+            .all(|bucket| bucket.by_model.is_empty()));
+        assert!(!empty.comparison_available);
+    }
+
+    /**
+     * 验证滚动周期的边界互斥、费用保留和缺失历史判断
+     */
+    #[test]
+    fn token_trend_rolling_windows_preserve_cost_and_boundaries() {
+        let conn = setup_db();
+        let now = Local.with_ymd_and_hms(2026, 10, 5, 12, 30, 0).unwrap();
+        let mut log = make_log_at(
+            "codex",
+            "model",
+            TokenType::Input,
+            100,
+            "boundary",
+            (now - Duration::days(7)).to_rfc3339(),
+        );
+        log.cost = Some(0.25);
+        batch_insert_token_logs(&conn, &[log]).unwrap();
+        let week =
+            get_token_trend_for_agents(&conn, "7d", &["codex".into()], &now.to_rfc3339()).unwrap();
+        assert_eq!(week.buckets.len(), 7);
+        assert_eq!(week.buckets[0].by_model["model"].input, 100);
+        assert_eq!(week.buckets[0].by_model["model"].agent_cost, 0.25);
+        assert!(week.previous_by_model.is_empty());
+        assert!(!week.comparison_available);
+        let month =
+            get_token_trend_for_agents(&conn, "30d", &["codex".into()], &now.to_rfc3339()).unwrap();
+        assert_eq!(month.buckets.len(), 30);
+        assert_eq!(month.buckets[23].by_model["model"].input, 100);
     }
 
     fn make_log(agent: &str, model: &str, tt: TokenType, count: i64, req_id: &str) -> TokenLog {

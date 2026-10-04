@@ -1,336 +1,273 @@
 .account-usage-card {
-    --usage-radius-outer: 14px;
-    --usage-radius-control: 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 16px;
-    border-radius: var(--usage-radius-outer);
-    background: rgba(255, 255, 255, 0.5);
-    border: 0.5px solid rgba(0, 0, 0, 0.06);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02), inset 0 1px 0 rgba(255, 255, 255, 0.42);
-    backdrop-filter: blur(20px) saturate(1.2);
-    -webkit-backdrop-filter: blur(20px) saturate(1.2);
+    border-top: 1px solid var(--popup-line);
+    padding-top: 10px;
 }
 
-.usage-card-header,
-.usage-provider-heading,
-.usage-provider-title-row,
-.usage-metric-line {
+.usage-card-header, .usage-provider-heading, .usage-provider-title-row, .usage-provider-actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 7px;
 }
 
-.usage-card-header,
-.usage-provider-heading,
-.usage-metric-line {
+.usage-card-header, .usage-provider-heading {
     justify-content: space-between;
 }
 
 .usage-card-header {
-    color: rgba(34, 34, 34, 0.48);
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-}
-
-.usage-refresh-all,
-.usage-refresh-icon {
-    border: none;
-    border-radius: var(--usage-radius-control);
-    background: rgba(15, 23, 42, 0.055);
-    color: rgba(34, 34, 34, 0.62);
-    cursor: pointer;
-    font-size: 10px;
-    line-height: 1;
-    transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease;
-}
-
-.usage-refresh-all {
-    padding: 5px 9px;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.01em;
-    text-transform: none;
-}
-
-.usage-refresh-icon {
-    flex: 0 0 auto;
-    width: 20px;
-    height: 20px;
-    opacity: 0;
-}
-
-.usage-provider-card:hover .usage-refresh-icon,
-.usage-refresh-icon:focus-visible,
-.usage-refresh-icon:disabled {
-    opacity: 1;
-}
-
-.usage-refresh-all:disabled,
-.usage-refresh-icon:disabled {
-    cursor: default;
-    opacity: 0.45;
+    margin-bottom: 8px;
 }
 
 .usage-card-grid {
     display: flex;
     flex-direction: column;
-    gap: 14px;
-    max-height: 188px;
-    overflow-y: auto;
-    padding-right: 1px;
-    overscroll-behavior: contain;
-}
-
-.usage-card-grid::-webkit-scrollbar {
-    width: 0;
-    height: 0;
+    gap: 10px;
 }
 
 .usage-provider-card {
-    display: flex;
     min-width: 0;
-    flex-direction: column;
-    gap: 12px;
-    padding: 0 0 14px;
-    border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+    padding: 9px 12px;
+    background: var(--popup-raised);
+    border: 1px solid var(--popup-line);
+    border-radius: 12px;
 }
 
-.usage-provider-card:last-child {
-    padding-bottom: 0;
-    border-bottom: none;
-}
-
-.usage-provider-card.empty {
-    justify-content: space-between;
+.usage-provider-heading {
+    margin-bottom: 8px;
 }
 
 .usage-provider-title-row {
     min-width: 0;
-    flex: 1;
+    flex-wrap: wrap;
 }
 
 .usage-provider-name {
-    overflow: hidden;
-    color: rgba(34, 34, 34, 0.88);
-    font-size: 13px;
-    font-weight: 700;
-    line-height: 1.2;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.usage-plan-badge,
-.usage-reset-credit-badge,
-.usage-stale-text {
-    flex: 0 0 auto;
-    border-radius: 6px;
-    padding: 2px 5px;
-    font-size: 9px;
-    font-weight: 700;
-    line-height: 1;
+    font-size: 14px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
 }
 
 .usage-plan-badge {
-    background: rgba(79, 156, 249, 0.14);
-    color: #2563eb;
-}
-
-.usage-reset-credit-badge {
-    max-width: 128px;
-    overflow: hidden;
-    background: rgba(20, 184, 166, 0.13);
-    color: #0f766e;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    padding: 0 6px;
+    border-radius: 5px;
+    background: #ffffff0b;
+    color: var(--popup-muted);
+    font-size: 10px;
 }
 
 .usage-stale-text {
-    background: rgba(245, 158, 11, 0.14);
-    color: #b7791f;
-}
-
-.usage-muted-text,
-.usage-error-text {
-    overflow: hidden;
     font-size: 10px;
-    line-height: 1.3;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    color: #dcb466;
 }
 
-.usage-muted-text {
-    color: rgba(34, 34, 34, 0.46);
+.usage-refresh-icon, .usage-expand {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    padding: 2px;
+    background: transparent;
+    border: 0;
+    border-radius: 5px;
+    color: var(--popup-muted) !important;
 }
 
-.usage-error-text {
-    color: #d92d20;
+.usage-refresh-icon svg {
+    width: 20px;
+    height: 20px;
+}
+
+.usage-expand svg {
+    width: 16px;
+    height: 16px;
+}
+
+.usage-refresh-icon:hover, .usage-expand:hover {
+    background: #ffffff0d;
+}
+
+.usage-provider-actions .usage-refresh-icon {
+    opacity: 0;
+}
+
+.usage-provider-card:hover .usage-refresh-icon, .usage-provider-card:focus-within .usage-refresh-icon, .usage-provider-actions .usage-refresh-icon:disabled {
+    opacity: 1;
 }
 
 .usage-quota-list {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
 }
 
 .usage-quota-metric {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
+    display: grid;
+    grid-template-columns: 66px minmax(30px, 1fr) 115px;
+    align-items: center;
+    gap: 10px;
+    font-size: 11px;
 }
 
-.usage-metric-line {
-    color: rgba(34, 34, 34, 0.66);
-    font-size: 11px;
-    line-height: 1.2;
+.usage-metric-label {
+    overflow-wrap: anywhere;
 }
 
 .usage-metric-stats {
-    display: inline-flex;
-    flex: 0 0 auto;
-    align-items: baseline;
-    gap: 7px;
-}
-
-.usage-reset-time {
-    color: rgba(34, 34, 34, 0.42);
-    font-size: 9px;
-    font-variant-numeric: tabular-nums;
-    font-weight: 600;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
 }
 
 .usage-metric-value {
-    flex: 0 0 auto;
-    color: rgba(34, 34, 34, 0.9);
-    font-variant-numeric: tabular-nums;
-    font-weight: 700;
+    font-size: 12px;
+}
+
+.usage-reset-time {
+    color: var(--popup-muted);
+    font-size: 9px;
+    line-height: 1.4;
 }
 
 .usage-progress-track {
-    height: 4px;
+    height: 6px;
+    border-radius: 8px;
     overflow: hidden;
-    border-radius: 999px;
-    background: rgba(15, 23, 42, 0.08);
+    background: #ffffff19;
 }
 
 .usage-progress-fill {
     height: 100%;
-    min-width: 4px;
+    width: 100%;
+    transform-origin: left;
     border-radius: inherit;
-    background: linear-gradient(90deg, #4f9cf9, #38c7b4);
-    transition: width 0.25s ease;
+    background: #86aa8b;
+    transition: transform 180ms ease-out;
 }
 
 .usage-progress-fill.warning {
-    background: linear-gradient(90deg, #f59e0b, #f97316);
+    background: #dfb66d;
 }
 
 .usage-progress-fill.danger {
-    background: linear-gradient(90deg, #ef4444, #dc2626);
+    background: #de8068;
+}
+
+.usage-credit-detail {
+    border-top: 1px solid var(--popup-line);
+    margin-top: 9px;
+    padding-top: 8px;
+}
+
+.usage-credit-detail > div {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    gap: 12px;
+}
+
+.usage-credit-detail strong {
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.usage-credit-detail p, .usage-extra-details {
+    color: var(--popup-muted);
+    font-size: 10px;
+}
+
+.usage-credit-detail p {
+    margin-top: 2px;
+}
+
+.usage-extra-details {
+    margin-top: 8px;
+}
+
+.usage-extra-details summary {
+    cursor: pointer;
+    width: fit-content;
+    border-radius: 3px;
+}
+
+.usage-extra-details p {
+    margin-top: 5px;
+    overflow-wrap: anywhere;
 }
 
 .usage-summary-list {
     display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 12px;
 }
 
 .usage-summary-pill {
-    display: inline-flex;
-    max-width: 100%;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 6px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.58);
-    color: rgba(34, 34, 34, 0.62);
-    font-size: 9px;
-    line-height: 1.2;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 11px;
 }
 
 .usage-summary-label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .usage-summary-value {
-    flex: 0 0 auto;
-    color: rgba(34, 34, 34, 0.84);
-    font-variant-numeric: tabular-nums;
-    font-weight: 700;
+    font-weight: 600;
 }
 
 .usage-summary-reset {
-    flex: 0 0 auto;
-    color: rgba(34, 34, 34, 0.42);
-    font-variant-numeric: tabular-nums;
+    color: var(--popup-muted);
+    font-size: 10px;
 }
 
-@media (prefers-color-scheme: dark) {
-    .account-usage-card {
-        background: rgba(255, 255, 255, 0.035);
-        border: none;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2),
-                    inset 0 0.5px 0 rgba(255, 255, 255, 0.14),
-                    inset 0 0 0 0.5px rgba(255, 255, 255, 0.06);
-    }
+.usage-muted-text, .usage-error-text {
+    font-size: 11px;
+    overflow-wrap: anywhere;
+}
 
-    .usage-card-header {
-        color: rgba(255, 255, 255, 0.48);
-    }
+.usage-muted-text {
+    color: var(--popup-muted);
+}
 
-    .usage-refresh-all,
-    .usage-refresh-icon {
-        background: rgba(255, 255, 255, 0.08);
-        color: rgba(255, 255, 255, 0.66);
-    }
+.usage-error-text {
+    color: #f1a78e;
+    margin-top: 6px;
+}
 
-    .usage-provider-card {
-        border-bottom-color: rgba(255, 255, 255, 0.07);
-    }
+.refresh-spinning {
+    animation: refresh-spin 1s linear infinite;
+}
 
-    .usage-provider-name,
-    .usage-metric-value,
-    .usage-summary-value {
-        color: rgba(255, 255, 255, 0.9);
+@keyframes refresh-spin {
+    to {
+        transform: rotate(360deg);
     }
+}
 
-    .usage-muted-text {
-        color: rgba(255, 255, 255, 0.46);
+@media (prefers-reduced-motion: reduce) {
+    .usage-progress-fill {
+        transition: none;
     }
-
-    .usage-metric-line,
-    .usage-summary-pill {
-        color: rgba(255, 255, 255, 0.64);
+    .refresh-spinning {
+        animation: none;
     }
+}
 
-    .usage-reset-time {
-        color: rgba(255, 255, 255, 0.38);
-    }
-
-    .usage-summary-reset {
-        color: rgba(255, 255, 255, 0.38);
-    }
-
-    .usage-plan-badge {
-        background: rgba(96, 165, 250, 0.18);
-        color: #93c5fd;
-    }
-
-    .usage-reset-credit-badge {
-        background: rgba(45, 212, 191, 0.14);
-        color: #5eead4;
-    }
-
-    .usage-summary-pill {
-        background: rgba(255, 255, 255, 0.07);
-    }
-
+@media (prefers-color-scheme: light) {
     .usage-progress-track {
-        background: rgba(255, 255, 255, 0.1);
+        background: #3526111a;
+    }
+    .usage-plan-badge {
+        background: #00000008;
+    }
+    .usage-stale-text {
+        color: #825f1e;
+    }
+    .usage-error-text {
+        color: #a64127;
     }
 }
