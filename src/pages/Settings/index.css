@@ -10,9 +10,11 @@
     --settings-selected: #dfb66d16;
     --settings-success: #a2c3a6;
     --settings-danger: #f1a78e;
+    --settings-radius: 8px;
+    --settings-hover: #ffffff08;
     width: 100%;
     height: 100vh;
-    background: var(--settings-bg);
+    background: var(--settings-surface);
     color: var(--settings-text);
     color-scheme: dark;
     font: 13px/1.5 -apple-system, 'SF Pro Text', system-ui, sans-serif;
@@ -28,7 +30,8 @@
 .settings-container button,
 .settings-container input,
 .settings-container select {
-    font: inherit;
+    font-family: inherit;
+    line-height: inherit;
     caret-color: var(--settings-accent);
 }
 
@@ -46,7 +49,7 @@
     cursor: default;
 }
 
-.settings-container :is(button, input, select):focus-visible {
+.settings-container :is(button, input, select, summary):focus-visible {
     outline: 2px solid var(--settings-accent);
     outline-offset: 3px;
 }
@@ -60,8 +63,8 @@
     flex-direction: column;
     flex: 0 0 166px;
     padding: 24px 12px 16px;
+    overflow-y: auto;
     background: var(--settings-sidebar);
-    border-right: 1px solid var(--settings-line);
 }
 
 .settings-brand {
@@ -69,7 +72,7 @@
     align-items: center;
     gap: 9px;
     padding: 0 5px;
-    margin-bottom: 30px;
+    margin-bottom: 26px;
     font-size: 14px;
     font-weight: 600;
     letter-spacing: -0.025em;
@@ -109,14 +112,15 @@
 .settings-tabs {
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: 4px;
 }
 
 .settings-container .settings-tab {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 9px 10px;
+    min-height: 36px;
+    padding: 8px 10px;
     border: 1px solid transparent;
     border-radius: 8px;
     background: transparent;
@@ -140,7 +144,6 @@
 .settings-container .settings-tab.active {
     color: var(--settings-accent);
     background: var(--settings-selected);
-    border-color: #dfb66d24;
     font-weight: 600;
 }
 
@@ -150,17 +153,18 @@
     flex-direction: column;
     min-width: 0;
     min-height: 0;
-    padding: 25px 24px 0;
+    padding: 24px 28px 0;
 }
 
 .settings-header {
-    padding-bottom: 21px;
+    padding-bottom: 24px;
+    margin-bottom: 4px;
     flex-shrink: 0;
 }
 
 .settings-header h1 {
     margin: 0 0 5px;
-    font-size: 21px;
+    font-size: 22px;
     font-weight: 600;
     letter-spacing: -0.025em;
 }
@@ -183,15 +187,17 @@
 }
 
 .settings-content {
+    border: 0;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    gap: 20px;
 }
 
 .settings-group {
-    border: 1px solid var(--settings-line);
-    border-radius: 12px;
-    background: var(--settings-surface);
+    min-width: 0;
 }
 
 .settings-container .setting-row {
@@ -199,8 +205,8 @@
     align-items: center;
     justify-content: space-between;
     gap: 20px;
-    padding: 16px;
-    min-height: 62px;
+    padding: 16px 0;
+    min-height: 64px;
 }
 
 .settings-container .setting-label,
@@ -219,18 +225,8 @@
 .settings-container .setting-hint,
 .settings-container .agent-status {
     color: var(--settings-muted);
-    font-size: 11px;
-    line-height: 1.6;
-}
-
-.settings-container .setting-divider {
-    height: 1px;
-    margin: 0 16px;
-    background: var(--settings-line);
-}
-
-.settings-container .setting-row + .setting-row {
-    border-top: 1px solid var(--settings-line);
+    font-size: 12px;
+    line-height: 1.5;
 }
 
 .settings-container .theme-setting-row {
@@ -250,10 +246,10 @@
     flex-direction: column;
     align-items: center;
     gap: 10px;
-    padding: 15px 10px 9px;
+    padding: 16px 10px 10px;
     border: 1px solid var(--settings-line);
-    border-radius: 9px;
-    background: var(--settings-bg);
+    border-radius: var(--settings-radius);
+    background: var(--settings-surface);
     color: var(--settings-muted);
     transition: background 120ms ease, border-color 120ms ease;
 }
@@ -291,43 +287,69 @@
 }
 
 .settings-container .theme-name {
-    font-size: 11px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
     font-weight: 500;
 }
 
 .settings-container .select-wrapper select,
 .settings-container .mac-number-input input,
 .settings-container .usage-credential-inline-field input {
-    min-height: 30px;
+    min-height: 32px;
     padding: 5px 9px;
     border: 1px solid var(--settings-line);
-    border-radius: 7px;
-    background: var(--settings-bg);
+    border-radius: var(--settings-radius);
+    background: var(--settings-surface);
     color: var(--settings-text);
     font-size: 12px;
 }
 
 .settings-container .select-wrapper {
+    position: relative;
     flex-shrink: 0;
+}
+
+.settings-container .select-wrapper::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    right: 12px;
+    width: 6px;
+    height: 6px;
+    border-right: 1.5px solid var(--settings-muted);
+    border-bottom: 1.5px solid var(--settings-muted);
+    transform: translateY(-70%) rotate(45deg);
+    pointer-events: none;
 }
 
 .settings-container .select-wrapper select {
+    /* 清除 WebKit 原生外观，避免系统渐变和双箭头覆盖自定义样式 */
+    -webkit-appearance: none;
+    appearance: none;
     min-width: 125px;
+    padding-right: 32px;
     cursor: pointer;
 }
 
-.settings-container .segmented-control {
-    display: inline-flex;
+.settings-container .settings-segments {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    min-height: 32px;
     flex-shrink: 0;
     gap: 2px;
     padding: 2px;
-    border: 1px solid var(--settings-line);
-    border-radius: 8px;
-    background: var(--settings-bg);
+    border-radius: var(--settings-radius);
+    background: var(--settings-surface);
 }
 
 .settings-container .segment-btn {
-    padding: 4px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+    padding: 3px 12px;
     border: 0;
     border-radius: 5px;
     background: transparent;
@@ -373,14 +395,14 @@
 .settings-container .usage-provider-compact-header,
 .settings-container .usage-provider-compact-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 70px 70px;
+    grid-template-columns: minmax(0, 1fr) 64px 64px;
     align-items: center;
     gap: 5px;
-    padding: 12px 16px;
+    padding: 14px 0;
 }
 
 .settings-container .usage-provider-compact-header {
-    padding-bottom: 4px;
+    padding: 10px 0 8px;
     color: var(--settings-muted);
     font-size: 10px;
 }
@@ -402,9 +424,8 @@
     width: 30px;
     height: 30px;
     flex-shrink: 0;
-    border: 1px solid var(--settings-line);
-    border-radius: 8px;
-    background: var(--settings-bg);
+    border-radius: var(--settings-radius);
+    background: var(--settings-surface);
 }
 
 .settings-container .usage-provider-avatar img {
@@ -446,7 +467,7 @@
 
 .settings-container .usage-provider-compact-hint {
     color: var(--settings-muted);
-    font-size: 10px;
+    font-size: 11px;
     overflow-wrap: anywhere;
 }
 
@@ -471,11 +492,11 @@
 
 .settings-container .usage-provider-checkmark {
     display: inline-flex;
-    width: 34px;
+    width: 36px;
     height: 22px;
-    border-radius: 12px;
+    border-radius: 11px;
     background: var(--settings-control);
-    border: 1px solid #ffffff18;
+    border: 1px solid transparent;
     pointer-events: none;
     transition: background 150ms ease;
 }
@@ -497,7 +518,7 @@
 }
 
 .settings-container .usage-provider-switch-cell input:checked + .usage-provider-checkmark::before {
-    transform: translateX(12px);
+    transform: translateX(14px);
 }
 
 .settings-container .usage-provider-switch-cell input:focus-visible + .usage-provider-checkmark,
@@ -516,7 +537,7 @@
     flex-wrap: wrap;
     gap: 8px;
     align-items: end;
-    padding: 0 16px 14px 56px;
+    padding: 12px 0 4px;
 }
 
 .settings-container .usage-credential-inline-fields {
@@ -541,7 +562,7 @@
 
 .settings-container .mac-toggle {
     position: relative;
-    width: 38px;
+    width: 36px;
     height: 22px;
     flex-shrink: 0;
 }
@@ -549,8 +570,8 @@
 .settings-container .mac-toggle-slider {
     position: absolute;
     inset: 0;
-    border-radius: 12px;
-    border: 1px solid #ffffff18;
+    border-radius: 11px;
+    border: 1px solid transparent;
     background: var(--settings-control);
     pointer-events: none;
     transition: background 150ms ease;
@@ -570,7 +591,7 @@
 }
 
 .settings-container .mac-toggle input:checked + .mac-toggle-slider::before {
-    transform: translateX(16px);
+    transform: translateX(14px);
 }
 
 .settings-container .mac-toggle input:disabled + .mac-toggle-slider {
@@ -602,19 +623,19 @@
 
 .settings-container .mac-btn {
     flex-shrink: 0;
-    min-height: 30px;
+    min-height: 32px;
     padding: 5px 12px;
-    border: 1px solid var(--settings-line);
-    border-radius: 7px;
+    border: 1px solid transparent;
+    border-radius: var(--settings-radius);
     background: var(--settings-control);
     color: var(--settings-text);
     font-size: 12px;
     white-space: nowrap;
-    transition: border-color 120ms ease;
+    transition: background 120ms ease;
 }
 
 .settings-container .mac-btn:hover:not(:disabled) {
-    border-color: var(--settings-muted);
+    background: color-mix(in srgb, var(--settings-control), var(--settings-text) 8%);
 }
 
 .settings-container .danger-text,
@@ -628,8 +649,10 @@
     align-items: flex-start;
     flex-direction: column;
     gap: 14px;
+    padding: 16px;
     background: #df715909;
-    border-radius: inherit;
+    border: 1px solid var(--settings-line);
+    border-radius: var(--settings-radius);
 }
 
 .settings-container .confirm-text {
@@ -679,21 +702,20 @@
     gap: 10px;
 }
 
-.settings-container .about-update-available,
-.settings-container .about-error-row {
+.settings-container .about-update-available {
     flex-direction: row;
     align-items: center;
     flex-wrap: wrap;
-}
-
-.settings-container .about-update-btn {
-    align-self: flex-start;
 }
 
 .settings-container .about-primary-btn {
     background: var(--settings-accent);
     border-color: var(--settings-accent);
     color: var(--settings-bg);
+}
+
+.settings-container .about-status-text:empty {
+    display: none;
 }
 
 .settings-container .about-success {
@@ -730,6 +752,88 @@
     font-size: 12px;
 }
 
+.settings-title-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.settings-save-status {
+    color: var(--settings-muted);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.settings-container fieldset:disabled :is(button, input, select) {
+    cursor: default;
+}
+
+.settings-container .theme-selected-icon {
+    width: 14px;
+    height: 14px;
+    visibility: hidden;
+}
+
+.settings-container .theme-option.active .theme-selected-icon {
+    visibility: visible;
+}
+
+.settings-container .agent-status.enabled {
+    color: var(--settings-success);
+}
+
+.settings-container .agent-source-badge {
+    background: transparent;
+    padding: 0;
+}
+
+.settings-container .settings-empty {
+    padding: 24px 0;
+    color: var(--settings-muted);
+    font-size: 12px;
+}
+
+.settings-container .credential-disclosure {
+    margin: -2px 0 14px 40px;
+}
+
+.settings-container .credential-disclosure summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: fit-content;
+    min-height: 28px;
+    color: var(--settings-muted);
+    font-size: 11px;
+    border-radius: 4px;
+    list-style: none;
+    cursor: pointer;
+}
+
+.settings-container .credential-disclosure summary::-webkit-details-marker {
+    display: none;
+}
+
+.settings-container .credential-disclosure summary svg {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+}
+
+.settings-container .credential-disclosure[open] summary svg {
+    transform: rotate(90deg);
+}
+
+.settings-container .credential-disclosure summary:hover,
+.settings-container .about-link:hover {
+    color: var(--settings-text);
+}
+
+.settings-container .segment-btn:hover:not(.active) {
+    background: var(--settings-hover);
+}
+
 @media (prefers-color-scheme: light) {
     .settings-shell {
         --settings-bg: #faf8f3;
@@ -743,6 +847,7 @@
         --settings-selected: #dfb66d25;
         --settings-success: #3c6845;
         --settings-danger: #a64127;
+        --settings-hover: #00000006;
         color-scheme: light;
     }
 
@@ -750,62 +855,28 @@
         filter: none;
     }
 
-    .settings-container .usage-provider-checkmark,
-    .settings-container .mac-toggle-slider {
-        border-color: #3a2c1926;
-    }
 }
 
 @media (max-width: 620px) {
-    .settings-container {
-        flex-direction: column;
-    }
-
     .settings-sidebar {
-        flex: 0 0 auto;
-        padding: 12px 16px 8px;
-        border-right: 0;
-        border-bottom: 1px solid var(--settings-line);
-    }
-
-    .settings-brand {
-        margin-bottom: 12px;
-    }
-
-    .settings-tabs {
-        flex-direction: row;
-        gap: 3px;
-        overflow-x: auto;
-        padding: 3px 0;
-        scrollbar-width: thin;
-        scrollbar-color: #77716966 transparent;
+        flex-basis: 148px;
     }
 
     .settings-container .settings-tab {
-        flex-shrink: 0;
-        padding: 7px 8px;
-        gap: 6px;
-    }
-
-    .settings-tab svg {
-        width: 15px;
-        height: 15px;
-    }
-
-    .settings-container .settings-footer {
-        display: none;
+        gap: 8px;
+        padding: 8px;
     }
 
     .settings-main {
-        padding: 18px 18px 0;
+        padding: 24px 18px 0;
     }
 
-    .settings-header {
-        padding-bottom: 16px;
+    .settings-container .setting-row {
+        gap: 12px;
     }
 
-    .settings-container .usage-credential-inline-form {
-        padding-left: 16px;
+    .settings-container .mac-btn {
+        padding: 5px 9px;
     }
 }
 

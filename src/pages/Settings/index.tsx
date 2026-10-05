@@ -4,7 +4,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { check, Update } from '@tauri-apps/plugin-updater';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import type {
     AccountUsageProviderInfo,
     AgentInfo,
@@ -69,10 +68,13 @@ function canShowProviderInMenuBar(provider: AccountUsageProviderInfo): boolean {
     return provider.capabilities.includes('account_quota');
 }
 
+/**
+ * 根据账号配置返回简短的状态翻译键
+ */
 function usageProviderStatusKey(provider: AccountUsageProviderInfo): string {
     if (provider.enabled) return 'settings.enabled';
     if (provider.available) return 'usage.available';
-    return 'usage.notDetected';
+    return 'settings.notDetected';
 }
 
 /**
@@ -80,9 +82,10 @@ function usageProviderStatusKey(provider: AccountUsageProviderInfo): string {
  */
 function Settings() {
     const { t, i18n } = useTranslation();
-    const reducedMotion = useReducedMotion();
     const {
         providers: usageProviders,
+        isLoading: usageLoading,
+        reload: reloadUsage,
         setEnabled: setUsageEnabled,
         setMenuBarVisible,
         saveCredential,
@@ -90,6 +93,9 @@ function Settings() {
     } = useAccountUsageContext();
     const [tab, setTab] = useState<Tab>('general');
     const [loadError, setLoadError] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [agentsLoading, setAgentsLoading] = useState(true);
+    const [agentsError, setAgentsError] = useState(false);
     const [actionError, setActionError] = useState(false);
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -121,12 +127,19 @@ function Settings() {
         }
     }, [i18n]);
 
+    /**
+     * 读取本地 Agent 列表并区分加载、空列表和失败，无参数和返回值
+     */
     const loadAgents = useCallback(async () => {
+        setAgentsLoading(true);
         try {
             const list = await invoke<AgentInfo[]>('get_agent_list');
             setAgents(list);
+            setAgentsError(false);
         } catch {
-            // 忽略
+            setAgentsError(true);
+        } finally {
+            setAgentsLoading(false);
         }
     }, []);
 
@@ -142,43 +155,49 @@ function Settings() {
     }, [loadSettings, loadAgents]);
 
     /**
-     * 保存指定设置并重新读取结果，失败时显示反馈
+     * 执行设置操作并提供忙碌与失败反馈，参数为异步操作，无返回值
+     */
+    const runSettingsAction = async (action: () => Promise<void>): Promise<void> => {
+        setSaving(true);
+        setActionError(false);
+        try {
+            await action();
+        } catch {
+            setActionError(true);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    /**
+     * 保存指定键值并重新读取设置，参数为设置键和值，无返回值
      */
     const updateSetting = async (key: string, value: string): Promise<void> => {
-        try {
+        await runSettingsAction(async () => {
             await invoke('update_settings', { key, value });
-            setActionError(false);
             await loadSettings();
-        } catch {
-            setActionError(true);
-        }
+        });
     };
 
     /**
-     * 切换指定 Agent 并同步设置，失败时保留现有状态
+     * 切换指定 Agent 并同步设置，参数为 Agent 名称和开关值，无返回值
      */
     const handleToggleAgent = async (agentName: string, enabled: boolean): Promise<void> => {
-        try {
+        await runSettingsAction(async () => {
             await invoke('toggle_agent', { agentName, enabled });
-            setActionError(false);
             await Promise.all([loadAgents(), loadSettings()]);
-        } catch {
-            setActionError(true);
-        }
+        });
     };
 
     /**
-     * 按确认的清理范围执行操作，成功关闭确认区，失败显示反馈
+     * 执行已确认的数据清理，参数为是否清空全部，成功后收起确认区
      */
     const handleClearData = async (all: boolean): Promise<void> => {
-        try {
+        await runSettingsAction(async () => {
             const keepDays = all ? null : settings?.keep_days ?? 90;
             await invoke('clear_data', { keepDays });
             setConfirmAction(null);
-            setActionError(false);
-        } catch {
-            setActionError(true);
-        }
+        });
     };
 
     /**
@@ -195,6 +214,9 @@ function Settings() {
         }
     };
 
+    /**
+     * 检查应用更新并保留结果反馈，无参数，返回完成检查的 Promise
+     */
     const handleCheckUpdate = async () => {
         setUpdateStatus({ state: 'checking' });
         try {
@@ -203,7 +225,6 @@ function Settings() {
                 setUpdateStatus({ state: 'update-available', version: update.version, update });
             } else {
                 setUpdateStatus({ state: 'no-update' });
-                setTimeout(() => setUpdateStatus({ state: 'idle' }), 3000);
             }
         } catch {
             // 获取更新失败时不展示具体错误细节，但需要和“已是最新版”区分开。
@@ -270,294 +291,309 @@ function Settings() {
                 </aside>
                 <main className="settings-main">
                     <header className="settings-header">
-                        <h1 id="settings-page-title">{t(`settings.${tab}`)}</h1>
+                        <div className="settings-title-row">
+                            <h1 id="settings-page-title">{t(`settings.${tab}`)}</h1>
+                            <span className="settings-save-status" role="status">{saving ? t('settings.working') : ''}</span>
+                        </div>
                         <p>{t(`settings.descriptions.${tab}`)}</p>
                     </header>
-                    <div className="settings-content-wrapper">
+                    <div className="settings-content-wrapper" key={tab}>
                         {actionError && <p className="settings-feedback error" role="alert">{t('settings.saveFailed')}</p>}
                         {loadError && <div className="settings-feedback error" role="alert">{t('settings.loadFailed')} <button className="mac-btn" type="button" onClick={loadSettings}>{t('common.retry')}</button></div>}
                         {!settings && !loadError && <p className="settings-feedback" role="status">{t('common.loading')}</p>}
-                        <AnimatePresence mode="wait" initial={false}>
-                            <motion.div
-                                key={tab}
-                                initial={{ opacity: 0 }}
-                                animate={{ opacity: 1 }}
-                                exit={{ opacity: 0 }}
-                                transition={{ duration: reducedMotion ? 0 : 0.12, ease: 'easeOut' }}
-                                className="settings-content"
-                                role="region"
-                                aria-labelledby="settings-page-title"
-                            >
-                                {tab === 'general' && settings && (
-                                    <div className="settings-group">
-                                        <div className="setting-row">
-                                            <span className="setting-label">{t('settings.language')}</span>
-                                            <div className="select-wrapper">
-                                                <select
-                                                    aria-label={t('settings.language')}
-                                                    value={settings.language}
-                                                    onChange={(e) => {
-                                                        updateSetting('language', e.target.value);
-                                                    }}
+                        <fieldset
+                            disabled={saving}
+                            className="settings-content"
+                            aria-busy={saving}
+                            aria-labelledby="settings-page-title"
+                        >
+                            {tab === 'general' && settings && (
+                                <div className="settings-group">
+                                    <div className="setting-row">
+                                        <span className="setting-label">{t('settings.language')}</span>
+                                        <div className="select-wrapper">
+                                            <select
+                                                aria-label={t('settings.language')}
+                                                value={settings.language}
+                                                onChange={(e) => {
+                                                    updateSetting('language', e.target.value);
+                                                }}
+                                            >
+                                                <option value="en">English</option>
+                                                <option value="zh-CN">简体中文</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div className="setting-row theme-setting-row">
+                                        <div className="setting-copy">
+                                            <span className="setting-label">{t('settings.colorTheme')}</span>
+                                            <span className="setting-hint">{t('settings.themeHint')}</span>
+                                        </div>
+                                        <div className="theme-picker">
+                                            {BURGER_THEMES.map((theme) => (
+                                                <button
+                                                    key={theme.id}
+                                                    type="button"
+                                                    className={`theme-option ${settings.color_theme === theme.id ? 'active' : ''}`}
+                                                    onClick={() => updateSetting('color_theme', theme.id)}
+                                                    title={t(theme.labelKey)}
+                                                    aria-pressed={settings.color_theme === theme.id}
                                                 >
-                                                    <option value="en">English</option>
-                                                    <option value="zh-CN">简体中文</option>
-                                                </select>
-                                            </div>
-                                        </div>
-                                        <div className="setting-divider" />
-                                        <div className="setting-row theme-setting-row">
-                                            <div className="setting-copy">
-                                                <span className="setting-label">{t('settings.colorTheme')}</span>
-                                                <span className="setting-hint">{t('settings.themeHint')}</span>
-                                            </div>
-                                            <div className="theme-picker">
-                                                {BURGER_THEMES.map((theme) => (
-                                                    <button
-                                                        key={theme.id}
-                                                        type="button"
-                                                        className={`theme-option ${settings.color_theme === theme.id ? 'active' : ''}`}
-                                                        onClick={() => updateSetting('color_theme', theme.id)}
-                                                        title={t(theme.labelKey)}
-                                                        aria-pressed={settings.color_theme === theme.id}
-                                                    >
-                                                        <span className="theme-swatches">
-                                                            {['output', 'cache_read', 'cache_create', 'input'].map((key, i) => (
+                                                    <span className="theme-swatches">
+                                                        {['output', 'cache_read', 'cache_create', 'input'].map((key, i) => (
                                                             // 小预览保持与主弹窗一致的食材顺序
-                                                                <span key={i} className="theme-dot" style={{ backgroundColor: theme.colors[key as keyof typeof theme.colors] }} />
-                                                            ))}
-                                                        </span>
-                                                        <span className="theme-name">{t(theme.labelKey)}</span>
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        </div>
-                                        <div className="setting-row">
-                                            <span className="setting-label">{t('settings.watchMode')}</span>
-                                            <div className="segmented-control" aria-label={t('settings.watchMode')}>
-                                                {['realtime', 'polling'].map((mode) => (
-                                                    <button
-                                                        key={mode}
-                                                        type="button"
-                                                        className={`segment-btn ${settings.watch_mode === mode ? 'active' : ''}`}
-                                                        aria-pressed={settings.watch_mode === mode}
-                                                        onClick={() => updateSetting('watch_mode', mode)}
-                                                    >
-                                                        {t(`settings.${mode}`)}
-                                                    </button>
-                                                ))}
-                                            </div>
+                                                            <span key={i} className="theme-dot" style={{ backgroundColor: theme.colors[key as keyof typeof theme.colors] }} />
+                                                        ))}
+                                                    </span>
+                                                    <span className="theme-name">{t(theme.labelKey)}<svg className="theme-selected-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m3 8 3 3 7-7" /></svg></span>
+                                                </button>
+                                            ))}
                                         </div>
                                     </div>
-                                )}
-
-                                {tab === 'alerts' && settings && (
-                                    <div className="settings-group">
-                                        <div className="setting-row">
-                                            <div className="setting-copy">
-                                                <span className="setting-label">{t('settings.runAlerts')}</span>
-                                                <span className="setting-hint">{t('settings.runAlertsHint')}</span>
-                                            </div>
-                                            <label className="mac-toggle">
-                                                <input
-                                                    type="checkbox"
-                                                    aria-label={t('settings.runAlerts')}
-                                                    checked={settings.behavior_tips_enabled}
-                                                    onChange={() => updateSetting('behavior_tips_enabled', String(!settings.behavior_tips_enabled))}
-                                                />
-                                                <span className="mac-toggle-slider" />
-                                            </label>
+                                    <div className="setting-row">
+                                        <span className="setting-label">{t('settings.watchMode')}</span>
+                                        <div className="settings-segments" aria-label={t('settings.watchMode')}>
+                                            {['realtime', 'polling'].map((mode) => (
+                                                <button
+                                                    key={mode}
+                                                    type="button"
+                                                    className={`segment-btn ${settings.watch_mode === mode ? 'active' : ''}`}
+                                                    aria-pressed={settings.watch_mode === mode}
+                                                    onClick={() => updateSetting('watch_mode', mode)}
+                                                >
+                                                    {t(`settings.${mode}`)}
+                                                </button>
+                                            ))}
                                         </div>
                                     </div>
-                                )}
+                                </div>
+                            )}
 
-                                {tab === 'agents' && settings && (
-                                    <div className="settings-group">
-                                        {agents.map((agent, index) => (
-                                            <div key={agent.name}>
-                                                <div className={`setting-row agent-row ${!agent.available ? 'unavailable' : ''}`}>
-                                                    <div className="agent-info">
-                                                        <div className="agent-name-row">
-                                                            <span className="agent-name">{agent.name}</span>
-                                                            <span className="agent-source-badge">{agent.source_type}</span>
-                                                        </div>
-                                                        <span className="agent-status">
-                                                            {agent.available
-                                                                ? t(agent.enabled ? 'settings.enabled' : 'settings.disabled')
-                                                                : t('settings.notDetected')}
-                                                        </span>
+                            {tab === 'alerts' && settings && (
+                                <div className="settings-group">
+                                    <div className="setting-row">
+                                        <div className="setting-copy">
+                                            <span className="setting-label">{t('settings.runAlerts')}</span>
+                                            <span className="setting-hint">{t('settings.runAlertsHint')}</span>
+                                        </div>
+                                        <label className="mac-toggle">
+                                            <input
+                                                type="checkbox"
+                                                aria-label={t('settings.runAlerts')}
+                                                checked={settings.behavior_tips_enabled}
+                                                onChange={() => updateSetting('behavior_tips_enabled', String(!settings.behavior_tips_enabled))}
+                                            />
+                                            <span className="mac-toggle-slider" />
+                                        </label>
+                                    </div>
+                                </div>
+                            )}
+
+                            {tab === 'agents' && settings && (
+                                <div className="settings-group">
+                                    {agentsError && <div className="settings-feedback error" role="alert">{t('settings.agentsLoadFailed')} <button className="mac-btn" type="button" onClick={loadAgents}>{t('common.retry')}</button></div>}
+                                    {agentsLoading && agents.length === 0 && <p className="settings-empty" role="status">{t('common.loading')}</p>}
+                                    {!agentsLoading && !agentsError && agents.length === 0 && <p className="settings-empty">{t('settings.noAgents')}</p>}
+                                    {agents.map((agent) => (
+                                        <div key={agent.name}>
+                                            <div className={`setting-row agent-row ${!agent.available ? 'unavailable' : ''}`}>
+                                                <div className="agent-info">
+                                                    <div className="agent-name-row">
+                                                        <span className="agent-name">{agent.name}</span>
+                                                        <span className="agent-source-badge">{agent.source_type}</span>
                                                     </div>
-                                                    <label className="mac-toggle">
-                                                        <input
-                                                            type="checkbox"
-                                                            aria-label={agent.name}
-                                                            checked={agent.enabled}
-                                                            disabled={!agent.available}
-                                                            onChange={() => handleToggleAgent(agent.name, !agent.enabled)}
-                                                        />
-                                                        <span className="mac-toggle-slider" />
-                                                    </label>
-                                                </div>
-                                                {index < agents.length - 1 && <div className="setting-divider" />}
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-
-                                {tab === 'data' && settings && (
-                                    <>
-                                        <div className="settings-group">
-                                            <div className="setting-row">
-                                                <span className="setting-label">{t('settings.keepDays')}</span>
-                                                <div className="mac-number-input">
-                                                    <input
-                                                        type="number"
-                                                        aria-label={t('settings.keepDays')}
-                                                        min={1}
-                                                        max={365}
-                                                        value={settings.keep_days}
-                                                        onChange={(e) => updateSetting('keep_days', e.target.value)}
-                                                    />
-                                                    <span className="suffix">{t('settings.days')}</span>
-                                                </div>
-                                            </div>
-                                            <div className="setting-divider" />
-                                            <div className="setting-row">
-                                                <div className="setting-copy">
-                                                    <span className="setting-label">{t('settings.modelPricing')}</span>
-                                                    <span className="setting-hint">
-                                                        {pricingReloadStatus.state === 'success'
-                                                            ? t('settings.pricingRefreshSuccess', { count: pricingReloadStatus.modelCount })
-                                                            : pricingReloadStatus.state === 'error'
-                                                                ? t('settings.pricingRefreshFailed')
-                                                                : t('settings.modelPricingHint')}
+                                                    <span className={`agent-status ${agent.available && agent.enabled ? 'enabled' : ''}`}>
+                                                        {agent.available
+                                                            ? t(agent.enabled ? 'settings.enabled' : 'settings.disabled')
+                                                            : t('settings.notDetected')}
                                                     </span>
                                                 </div>
-                                                <button
-                                                    className="mac-btn"
-                                                    type="button"
-                                                    disabled={pricingReloadStatus.state === 'loading'}
-                                                    onClick={handleReloadPricing}
-                                                >
-                                                    {pricingReloadStatus.state === 'loading'
-                                                        ? t('settings.refreshingPricing')
-                                                        : t('settings.refreshPricing')}
-                                                </button>
+                                                <label className="mac-toggle">
+                                                    <input
+                                                        type="checkbox"
+                                                        aria-label={agent.name}
+                                                        checked={agent.enabled}
+                                                        disabled={!agent.available}
+                                                        onChange={() => handleToggleAgent(agent.name, !agent.enabled)}
+                                                    />
+                                                    <span className="mac-toggle-slider" />
+                                                </label>
                                             </div>
                                         </div>
+                                    ))}
+                                </div>
+                            )}
 
-                                        <div className="settings-group mt-4">
-                                            {confirmAction ? (
-                                                <div className="setting-row confirm-row">
+                            {tab === 'data' && settings && (
+                                <>
+                                    <div className="settings-group">
+                                        <div className="setting-row">
+                                            <span className="setting-label">{t('settings.keepDays')}</span>
+                                            <div className="mac-number-input">
+                                                <input
+                                                    type="number"
+                                                    aria-label={t('settings.keepDays')}
+                                                    min={1}
+                                                    max={365}
+                                                    defaultValue={settings.keep_days}
+                                                    onBlur={(e) => {
+                                                        if (e.currentTarget.reportValidity() && Number(e.target.value) !== settings.keep_days) {
+                                                            void updateSetting('keep_days', e.target.value);
+                                                        }
+                                                    }}
+                                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                    required
+                                                />
+                                                <span className="suffix">{t('settings.days')}</span>
+                                            </div>
+                                        </div>
+                                        <div className="setting-row">
+                                            <div className="setting-copy">
+                                                <span className="setting-label">{t('settings.modelPricing')}</span>
+                                                <span className="setting-hint">
+                                                    {pricingReloadStatus.state === 'success'
+                                                        ? t('settings.pricingRefreshSuccess', { count: pricingReloadStatus.modelCount })
+                                                        : pricingReloadStatus.state === 'error'
+                                                            ? t('settings.pricingRefreshFailed')
+                                                            : t('settings.modelPricingHint')}
+                                                </span>
+                                            </div>
+                                            <button
+                                                className="mac-btn"
+                                                type="button"
+                                                disabled={pricingReloadStatus.state === 'loading'}
+                                                onClick={handleReloadPricing}
+                                            >
+                                                {pricingReloadStatus.state === 'loading'
+                                                    ? t('settings.refreshingPricing')
+                                                    : t('settings.refreshPricing')}
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="settings-group">
+                                        {confirmAction ? (
+                                            <div className="setting-row confirm-row">
+                                                <div className="setting-copy">
+                                                    <strong className="setting-label">{t(`settings.${confirmAction}`)}</strong>
                                                     <span className="confirm-text">{t('settings.clearConfirm')}</span>
-                                                    <div className="action-buttons">
-                                                        <button
-                                                            className="mac-btn"
-                                                            type="button"
-                                                            onClick={() => setConfirmAction(null)}
-                                                        >
-                                                            {t('settings.cancel')}
-                                                        </button>
-                                                        <button
-                                                            className="mac-btn danger-text"
-                                                            type="button"
-                                                            onClick={() => handleClearData(confirmAction === 'clearAll')}
-                                                        >
-                                                            {t('settings.confirm')}
-                                                        </button>
-                                                    </div>
                                                 </div>
-                                            ) : (
+                                                <div className="action-buttons">
+                                                    <button
+                                                        className="mac-btn"
+                                                        type="button"
+                                                        autoFocus
+                                                        onClick={() => setConfirmAction(null)}
+                                                    >
+                                                        {t('settings.cancel')}
+                                                    </button>
+                                                    <button
+                                                        className="mac-btn danger-text"
+                                                        type="button"
+                                                        onClick={() => handleClearData(confirmAction === 'clearAll')}
+                                                    >
+                                                        {t('settings.confirm')}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="cleanup-options">
                                                 <div className="setting-row">
-                                                    <span className="setting-label">{t('settings.data')}</span>
-                                                    <div className="action-buttons">
-                                                        <button
-                                                            className="mac-btn"
-                                                            type="button"
-                                                            onClick={() => setConfirmAction('clearOld')}
-                                                        >
-                                                            {t('settings.clearOld')}
-                                                        </button>
-                                                        <button
-                                                            className="mac-btn danger-text"
-                                                            type="button"
-                                                            onClick={() => setConfirmAction('clearAll')}
-                                                        >
-                                                            {t('settings.clearAll')}
-                                                        </button>
-                                                    </div>
+                                                    <div className="setting-copy"><span className="setting-label">{t('settings.clearOld')}</span><span className="setting-hint">{t('settings.clearOldHint', { days: settings.keep_days })}</span></div>
+                                                    <button
+                                                        className="mac-btn"
+                                                        type="button"
+                                                        onClick={() => setConfirmAction('clearOld')}
+                                                    >
+                                                        {t('settings.clearOld')}
+                                                    </button>
                                                 </div>
-                                            )}
-                                        </div>
-                                    </>
-                                )}
-                                {tab === 'usage' && (
-                                    <div className="settings-group usage-provider-compact-list">
-                                        <div className="usage-provider-compact-header">
-                                            <span>{t('usage.provider', 'Provider')}</span>
-                                            <span>{t('usage.accountUsageShort', 'Usage')}</span>
-                                            <span>{t('usage.menuBarShort', 'Menu bar')}</span>
-                                        </div>
-                                        {visibleUsageProviders.map((provider, index) => {
-                                            const menuBarAvailable = isMac && provider.enabled && canShowProviderInMenuBar(provider);
-                                            const menuBarHint = !isMac
-                                                ? t('usage.menuBarMacOnly', 'macOS only')
-                                                : provider.enabled
-                                                    ? t('usage.menuBarDisplayHint', 'Show the provider icon and usage percent')
-                                                    : t('usage.enableProviderFirst', 'Enable account usage first');
-                                            const accountUsageHint = provider.available
-                                                ? t('usage.refreshEvery', { seconds: provider.refresh_interval_secs })
-                                                : provider.credential_requirements?.length > 0
-                                                    ? t('usage.requiresCredential', 'Requires credential')
-                                                    : t('usage.notDetected', 'Auth file or credential not detected');
-                                            const shouldShowCredentialForm = provider.credential_requirements?.length > 0
+                                                <div className="setting-row">
+                                                    <div className="setting-copy"><span className="setting-label">{t('settings.clearAll')}</span><span className="setting-hint">{t('settings.clearAllHint')}</span></div>
+                                                    <button
+                                                        className="mac-btn danger-text"
+                                                        type="button"
+                                                        onClick={() => setConfirmAction('clearAll')}
+                                                    >
+                                                        {t('settings.clearAll')}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </>
+                            )}
+                            {tab === 'usage' && (
+                                <div className="settings-group usage-provider-compact-list">
+                                    {usageLoading && visibleUsageProviders.length === 0 && <p className="settings-empty" role="status">{t('common.loading')}</p>}
+                                    {!usageLoading && visibleUsageProviders.length === 0 && <div className="settings-feedback">{t('settings.noUsageProviders')} <button type="button" className="mac-btn" onClick={reloadUsage}>{t('common.retry')}</button></div>}
+                                    <div className="usage-provider-compact-header">
+                                        <span>{t('usage.provider', 'Provider')}</span>
+                                        <span>{t('usage.accountUsageShort', 'Usage')}</span>
+                                        <span>{t('usage.menuBarShort', 'Menu bar')}</span>
+                                    </div>
+                                    {visibleUsageProviders.map((provider) => {
+                                        const menuBarAvailable = isMac && provider.enabled && canShowProviderInMenuBar(provider);
+                                        const menuBarHint = !isMac
+                                            ? t('usage.menuBarMacOnly', 'macOS only')
+                                            : provider.enabled
+                                                ? t('usage.menuBarDisplayHint', 'Show the provider icon and usage percent')
+                                                : t('usage.enableProviderFirst', 'Enable account usage first');
+                                        const accountUsageHint = provider.available
+                                            ? t('usage.refreshEvery', { seconds: provider.refresh_interval_secs })
+                                            : provider.credential_requirements?.length > 0
+                                                ? t('usage.requiresCredential', 'Requires credential')
+                                                : t('usage.notDetected', 'Auth file or credential not detected');
+                                        const shouldShowCredentialForm = provider.credential_requirements?.length > 0
                                             && (!provider.available || provider.id === 'claude-code');
-                                            const statusKey = usageProviderStatusKey(provider);
+                                        const statusKey = usageProviderStatusKey(provider);
 
-                                            return (
-                                                <div key={provider.id}>
-                                                    <div className={`usage-provider-compact-row ${provider.enabled ? 'enabled' : ''}`}>
-                                                        <div className="usage-provider-identity">
-                                                            <span className={`usage-provider-avatar provider-${provider.id}`} aria-hidden="true">
-                                                                {USAGE_PROVIDER_ICONS[provider.id] ? (
-                                                                    <img src={USAGE_PROVIDER_ICONS[provider.id]} alt="" />
-                                                                ) : (
-                                                                    provider.display_name.slice(0, 1)
-                                                                )}
-                                                            </span>
-                                                            <div className="usage-provider-title-stack">
-                                                                <div className="usage-provider-title-line">
-                                                                    <span className="usage-provider-compact-name">{provider.display_name}</span>
-                                                                    <span className={`usage-provider-status-badge ${provider.enabled ? 'enabled' : ''}`}>
-                                                                        {t(statusKey)}
-                                                                    </span>
-                                                                </div>
-                                                                {!provider.available && (
-                                                                    <span className="usage-provider-compact-hint">{accountUsageHint}</span>
-                                                                )}
+                                        return (
+                                            <div key={provider.id}>
+                                                <div className={`usage-provider-compact-row ${provider.enabled ? 'enabled' : ''}`}>
+                                                    <div className="usage-provider-identity">
+                                                        <span className={`usage-provider-avatar provider-${provider.id}`} aria-hidden="true">
+                                                            {USAGE_PROVIDER_ICONS[provider.id] ? (
+                                                                <img src={USAGE_PROVIDER_ICONS[provider.id]} alt="" />
+                                                            ) : (
+                                                                provider.display_name.slice(0, 1)
+                                                            )}
+                                                        </span>
+                                                        <div className="usage-provider-title-stack">
+                                                            <div className="usage-provider-title-line">
+                                                                <span className="usage-provider-compact-name">{provider.display_name}</span>
+                                                                <span className={`usage-provider-status-badge ${provider.enabled ? 'enabled' : ''}`}>
+                                                                    {t(statusKey)}
+                                                                </span>
                                                             </div>
+                                                            {!provider.available && (
+                                                                <span className="usage-provider-compact-hint">{accountUsageHint}</span>
+                                                            )}
                                                         </div>
-                                                        <label className="usage-provider-switch-cell" title={accountUsageHint}>
-                                                            <input
-                                                                type="checkbox"
-                                                                checked={provider.enabled}
-                                                                onChange={(e) => setUsageEnabled(provider.id, e.target.checked)}
-                                                                aria-label={`${provider.display_name} ${t('usage.accountUsageShort', 'Usage')}`}
-                                                            />
-                                                            <span className="usage-provider-checkmark" />
-                                                        </label>
-                                                        <label className={`usage-provider-switch-cell ${!menuBarAvailable ? 'disabled' : ''}`} title={menuBarHint}>
-                                                            <input
-                                                                type="checkbox"
-                                                                checked={provider.enabled && provider.show_in_menu_bar}
-                                                                disabled={!menuBarAvailable}
-                                                                onChange={(e) => setMenuBarVisible(provider.id, e.target.checked)}
-                                                                aria-label={`${provider.display_name} ${t('usage.menuBarShort', 'Menu bar')}`}
-                                                            />
-                                                            <span className="usage-provider-checkmark" />
-                                                        </label>
                                                     </div>
-                                                    {shouldShowCredentialForm && (
+                                                    <label className="usage-provider-switch-cell" title={accountUsageHint}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={provider.enabled}
+                                                            onChange={(e) => { const enabled = e.target.checked; void runSettingsAction(() => setUsageEnabled(provider.id, enabled)); }}
+                                                            aria-label={`${provider.display_name} ${t('usage.accountUsageShort', 'Usage')}`}
+                                                        />
+                                                        <span className="usage-provider-checkmark" />
+                                                    </label>
+                                                    <label className={`usage-provider-switch-cell ${!menuBarAvailable ? 'disabled' : ''}`} title={menuBarHint}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={provider.enabled && provider.show_in_menu_bar}
+                                                            disabled={!menuBarAvailable}
+                                                            onChange={(e) => { const visible = e.target.checked; void runSettingsAction(() => setMenuBarVisible(provider.id, visible)); }}
+                                                            aria-label={`${provider.display_name} ${t('usage.menuBarShort', 'Menu bar')}`}
+                                                        />
+                                                        <span className="usage-provider-checkmark" />
+                                                    </label>
+                                                </div>
+                                                {shouldShowCredentialForm && (
+                                                    <details className="credential-disclosure" open={!provider.available}>
+                                                        <summary>{t('settings.credentials')}<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg></summary>
                                                         <form
                                                             className="usage-credential-inline-form"
                                                             onSubmit={(e) => {
@@ -572,13 +608,17 @@ function Settings() {
                                                                 const secret = String(formData.get(secretRequirement.key) ?? '').trim();
 
                                                                 // 多字段 Provider 将公开账号标识复用为 account_key，密钥仍只进入系统凭据存储
-                                                                saveCredential(
-                                                                    provider.id,
-                                                                    secretRequirement.key,
-                                                                    secret,
-                                                                    accountKey || secretRequirement.label,
-                                                                    accountKey,
-                                                                );
+                                                                const form = e.currentTarget;
+                                                                void runSettingsAction(async () => {
+                                                                    await saveCredential(
+                                                                        provider.id,
+                                                                        secretRequirement.key,
+                                                                        secret,
+                                                                        accountKey || secretRequirement.label,
+                                                                        accountKey,
+                                                                    );
+                                                                    form.reset();
+                                                                });
                                                             }}
                                                         >
                                                             <div className="usage-credential-inline-fields">
@@ -590,119 +630,105 @@ function Settings() {
                                                                             type={req.secret ? 'password' : 'text'}
                                                                             placeholder={req.description}
                                                                             required={req.required}
+                                                                            autoComplete="off"
+                                                                            spellCheck={false}
                                                                         />
                                                                     </label>
                                                                 ))}
                                                             </div>
                                                             <button type="submit" className="mac-btn">{t('usage.saveCredential', 'Save Credential')}</button>
-                                                            <button type="button" className="mac-btn danger-text" onClick={() => clearCredential(provider.id)}>{t('usage.clearCredential', 'Clear')}</button>
+                                                            <button type="button" className="mac-btn danger-text" onClick={() => { void runSettingsAction(() => clearCredential(provider.id)); }}>{t('usage.clearCredential', 'Clear')}</button>
                                                         </form>
-                                                    )}
-                                                    {index < visibleUsageProviders.length - 1 && <div className="setting-divider" />}
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
-                                {tab === 'about' && (
-                                    <>
-                                        <div className="settings-group">
-                                            <div className="setting-row">
-                                                <span className="setting-label">{t('settings.version')}</span>
-                                                <span className="setting-value">{appVersion}</span>
+                                                    </details>
+                                                )}
                                             </div>
-                                            <div className="setting-divider" />
-                                            <div className="setting-row">
-                                                <span className="setting-label">{t('settings.github')}</span>
-                                                <button
-                                                    type="button"
-                                                    className="about-link"
-                                                    onClick={() => openUrl('https://github.com/zreo0/token-burger')}
-                                                >
+                                        );
+                                    })}
+                                </div>
+                            )}
+                            {tab === 'about' && (
+                                <>
+                                    <div className="settings-group">
+                                        <div className="setting-row">
+                                            <span className="setting-label">{t('settings.version')}</span>
+                                            <span className="setting-value">{appVersion}</span>
+                                        </div>
+                                        <div className="setting-row">
+                                            <span className="setting-label">{t('settings.github')}</span>
+                                            <button
+                                                type="button"
+                                                className="about-link"
+                                                onClick={() => openUrl('https://github.com/zreo0/token-burger')}
+                                            >
                                                 zreo0/token-burger
+                                            </button>
+                                        </div>
+                                        {(updateStatus.state === 'idle' || updateStatus.state === 'checking' || updateStatus.state === 'no-update' || updateStatus.state === 'error') && (
+                                            <div className="setting-row">
+                                                <div className="setting-copy">
+                                                    <span className="setting-label">{t('settings.appUpdates')}</span>
+                                                    <span className={`about-status-text ${updateStatus.state === 'error' ? 'about-error-text' : updateStatus.state === 'no-update' ? 'about-success' : ''}`} role="status">
+                                                        {updateStatus.state === 'no-update' ? t('settings.upToDate') : updateStatus.state === 'error' ? updateStatus.message : ''}
+                                                    </span>
+                                                </div>
+                                                <button type="button" className="mac-btn" onClick={handleCheckUpdate} disabled={updateStatus.state === 'checking'}>
+                                                    {t(updateStatus.state === 'checking' ? 'settings.checking' : updateStatus.state === 'error' ? 'common.retry' : 'settings.checkUpdate')}
                                                 </button>
                                             </div>
-                                        </div>
-
-                                        <div className="settings-group">
-                                            {updateStatus.state === 'idle' && (
-                                                <div className="setting-row about-update-row">
-                                                    <button type="button" className="mac-btn about-update-btn" onClick={handleCheckUpdate}>
-                                                        {t('settings.checkUpdate')}
+                                        )}
+                                        {updateStatus.state === 'update-available' && (
+                                            <div className="setting-row about-update-row about-update-available">
+                                                <span className="about-status-text">
+                                                    {t('settings.newVersion', { version: updateStatus.version })}
+                                                </span>
+                                                <div className="action-buttons">
+                                                    <button
+                                                        type="button"
+                                                        className="mac-btn"
+                                                        onClick={() => setUpdateStatus({ state: 'idle' })}
+                                                    >
+                                                        {t('settings.later')}
                                                     </button>
-                                                </div>
-                                            )}
-                                            {updateStatus.state === 'checking' && (
-                                                <div className="setting-row about-update-row">
-                                                    <span className="about-status-text">{t('settings.checking')}</span>
-                                                </div>
-                                            )}
-                                            {updateStatus.state === 'no-update' && (
-                                                <div className="setting-row about-update-row">
-                                                    <span className="about-status-text about-success">{t('settings.upToDate')}</span>
-                                                </div>
-                                            )}
-                                            {updateStatus.state === 'update-available' && (
-                                                <div className="setting-row about-update-row about-update-available">
-                                                    <span className="about-status-text">
-                                                        {t('settings.newVersion', { version: updateStatus.version })}
-                                                    </span>
-                                                    <div className="action-buttons">
-                                                        <button
-                                                            type="button"
-                                                            className="mac-btn"
-                                                            onClick={() => setUpdateStatus({ state: 'idle' })}
-                                                        >
-                                                            {t('settings.later')}
-                                                        </button>
-                                                        <button
-                                                            type="button"
-                                                            className="mac-btn about-primary-btn"
-                                                            onClick={() => handleDownloadUpdate(updateStatus.update)}
-                                                        >
-                                                            {t('settings.download')}
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            )}
-                                            {updateStatus.state === 'downloading' && (
-                                                <div className="setting-row about-update-row about-downloading">
-                                                    <span className="about-status-text">
-                                                        {t('settings.downloading', { progress: updateStatus.progress })}
-                                                    </span>
-                                                    <div className="about-progress-bar">
-                                                        <div
-                                                            className="about-progress-fill"
-                                                            style={{ transform: `scaleX(${updateStatus.progress / 100})` }}
-                                                        />
-                                                    </div>
-                                                </div>
-                                            )}
-                                            {updateStatus.state === 'ready-to-restart' && (
-                                                <div className="setting-row about-update-row about-update-available">
-                                                    <span className="about-status-text">{t('settings.readyToRestart')}</span>
                                                     <button
                                                         type="button"
                                                         className="mac-btn about-primary-btn"
-                                                        onClick={handleRestart}
+                                                        onClick={() => handleDownloadUpdate(updateStatus.update)}
                                                     >
-                                                        {t('settings.restart')}
+                                                        {t('settings.download')}
                                                     </button>
                                                 </div>
-                                            )}
-                                            {updateStatus.state === 'error' && (
-                                                <div className="setting-row about-update-row about-error-row">
-                                                    <span className="about-status-text about-error-text">{updateStatus.message}</span>
-                                                    <button type="button" className="mac-btn" onClick={handleCheckUpdate}>
-                                                        {t('common.retry')}
-                                                    </button>
+                                            </div>
+                                        )}
+                                        {updateStatus.state === 'downloading' && (
+                                            <div className="setting-row about-update-row about-downloading">
+                                                <span className="about-status-text">
+                                                    {t('settings.downloading', { progress: updateStatus.progress })}
+                                                </span>
+                                                <div className="about-progress-bar" role="progressbar" aria-label={t('settings.download')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={updateStatus.progress}>
+                                                    <div
+                                                        className="about-progress-fill"
+                                                        style={{ transform: `scaleX(${updateStatus.progress / 100})` }}
+                                                    />
                                                 </div>
-                                            )}
-                                        </div>
-                                    </>
-                                )}
-                            </motion.div>
-                        </AnimatePresence>
+                                            </div>
+                                        )}
+                                        {updateStatus.state === 'ready-to-restart' && (
+                                            <div className="setting-row about-update-row about-update-available">
+                                                <span className="about-status-text">{t('settings.readyToRestart')}</span>
+                                                <button
+                                                    type="button"
+                                                    className="mac-btn about-primary-btn"
+                                                    onClick={handleRestart}
+                                                >
+                                                    {t('settings.restart')}
+                                                </button>
+                                            </div>
+                                        )}
+
+                                    </div>
+                                </>
+                            )}
+                        </fieldset>
                     </div>
                 </main>
             </div>
