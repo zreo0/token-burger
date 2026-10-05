@@ -206,8 +206,8 @@ fn get_token_summary_filtered(
 ) -> Result<TokenSummary, rusqlite::Error> {
     let time_filter = match range {
         "today" => "date(timestamp, 'localtime') = date('now', 'localtime')",
-        "7d" => "datetime(timestamp, 'localtime') >= datetime('now', '-7 days', 'localtime')",
-        "30d" => "datetime(timestamp, 'localtime') >= datetime('now', '-30 days', 'localtime')",
+        "7d" => "datetime(timestamp, 'localtime') >= datetime('now', 'localtime', 'start of day', '-6 days') AND unixepoch(timestamp) <= unixepoch('now')",
+        "30d" => "datetime(timestamp, 'localtime') >= datetime('now', 'localtime', 'start of day', '-29 days') AND unixepoch(timestamp) <= unixepoch('now')",
         _ => "date(timestamp, 'localtime') = date('now', 'localtime')",
     };
     let agent_filter = build_agent_filter(enabled_agents);
@@ -258,8 +258,8 @@ fn get_token_summary_filtered(
 }
 
 /**
- * 从统计库按小时或连续 24 小时聚合，参数为范围、启用 Agent 和查询时刻
- * 返回补零后的趋势与上一等长周期；不读取 Agent 原始数据源
+ * 从统计库按小时或本地自然日聚合，参数为范围、启用 Agent 和查询时刻
+ * 返回补零后的趋势与上一周期同期统计；今天只统计到查询时刻
  */
 pub fn get_token_trend_for_agents(
     conn: &Connection,
@@ -270,10 +270,32 @@ pub fn get_token_trend_for_agents(
     use crate::types::{TokenBreakdown, TokenTrend, TokenTrendBucket};
 
     let end: i64 = conn.query_row("SELECT unixepoch(?1)", [now], |row| row.get(0))?;
+    let days = match range {
+        "7d" => 7,
+        "30d" => 30,
+        _ => 0,
+    };
     let (start, previous_start, previous_end, step) = match range {
         "7d" | "30d" => {
-            let duration = if range == "7d" { 7 * 86400 } else { 30 * 86400 };
-            (end - duration, end - duration * 2, end - duration, 86400)
+            let (start, previous_start, previous_end) = conn.query_row(
+                "SELECT unixepoch(?1, 'localtime', 'start of day', ?2, 'utc'),
+                        unixepoch(?1, 'localtime', 'start of day', ?3, 'utc'),
+                        unixepoch(?1, 'localtime', ?4, 'utc')",
+                params![
+                    now,
+                    format!("-{} days", days - 1),
+                    format!("-{} days", days * 2 - 1),
+                    format!("-{days} days")
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )?;
+            (start, previous_start, previous_end, 86400)
         }
         _ => {
             let (start, previous_start, previous_end) = conn.query_row(
@@ -292,23 +314,47 @@ pub fn get_token_trend_for_agents(
             (start, previous_start, previous_end, 3600)
         }
     };
-    let mut result = TokenTrend {
-        buckets: (start..end.max(start + 1))
+    // 每个日桶独立换算本地午夜，夏令时切换日可以是 23 或 25 小时
+    let buckets = if days > 0 {
+        let mut stmt = conn.prepare(
+            "WITH RECURSIVE days(n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM days WHERE n + 1 < ?2)
+             SELECT unixepoch(?1, 'unixepoch', 'localtime', '+' || n || ' days', 'utc'),
+                    unixepoch(?1, 'unixepoch', 'localtime', '+' || (n + 1) || ' days', 'utc')
+             FROM days ORDER BY n",
+        )?;
+        let rows = stmt.query_map(params![start, days], |row| {
+            Ok(TokenTrendBucket {
+                start: row.get(0)?,
+                end: row.get(1)?,
+                by_model: HashMap::new(),
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    } else {
+        (start..end.max(start + 1))
             .step_by(step as usize)
             .map(|time| TokenTrendBucket {
                 start: time,
                 end: (time + step).min(end),
                 by_model: HashMap::new(),
             })
-            .collect(),
+            .collect()
+    };
+    let mut result = TokenTrend {
+        buckets,
         previous_by_model: HashMap::new(),
         comparison_available: false,
+    };
+    let bucket_index = if days > 0 {
+        format!("CAST(julianday(date(timestamp, 'localtime')) - julianday(date({start}, 'unixepoch', 'localtime')) AS INTEGER)")
+    } else {
+        format!("CAST((unixepoch(timestamp) - {start}) / {step} AS INTEGER)")
     };
     let agent_filter = build_agent_filter(Some(enabled_agents));
     // Unix 时间比较能正确处理日志中不同的 RFC3339 时区偏移
     let sql = format!(
         "SELECT CASE WHEN unixepoch(timestamp) >= {start}
-                     THEN CAST((unixepoch(timestamp) - {start}) / {step} AS INTEGER)
+                     THEN {bucket_index}
                      ELSE -1 END AS bucket,
                 model_id, token_type, SUM(token_count), COALESCE(SUM(cost), 0.0)
          FROM token_logs
@@ -370,8 +416,8 @@ fn get_agent_cost_summary_filtered(
 ) -> Result<f64, rusqlite::Error> {
     let time_filter = match range {
         "today" => "date(timestamp, 'localtime') = date('now', 'localtime')",
-        "7d" => "datetime(timestamp, 'localtime') >= datetime('now', '-7 days', 'localtime')",
-        "30d" => "datetime(timestamp, 'localtime') >= datetime('now', '-30 days', 'localtime')",
+        "7d" => "datetime(timestamp, 'localtime') >= datetime('now', 'localtime', 'start of day', '-6 days') AND unixepoch(timestamp) <= unixepoch('now')",
+        "30d" => "datetime(timestamp, 'localtime') >= datetime('now', 'localtime', 'start of day', '-29 days') AND unixepoch(timestamp) <= unixepoch('now')",
         _ => "date(timestamp, 'localtime') = date('now', 'localtime')",
     };
     let agent_filter = build_agent_filter(enabled_agents);
@@ -727,33 +773,72 @@ mod tests {
     }
 
     /**
-     * 验证滚动周期的边界互斥、费用保留和缺失历史判断
+     * 验证自然日边界、跨时区归桶、同期截止与费用保留，可在不同时区运行
      */
     #[test]
-    fn token_trend_rolling_windows_preserve_cost_and_boundaries() {
-        let conn = setup_db();
-        let now = Local.with_ymd_and_hms(2026, 10, 5, 12, 30, 0).unwrap();
-        let mut log = make_log_at(
-            "codex",
-            "model",
-            TokenType::Input,
-            100,
-            "boundary",
-            (now - Duration::days(7)).to_rfc3339(),
-        );
-        log.cost = Some(0.25);
-        batch_insert_token_logs(&conn, &[log]).unwrap();
-        let week =
-            get_token_trend_for_agents(&conn, "7d", &["codex".into()], &now.to_rfc3339()).unwrap();
-        assert_eq!(week.buckets.len(), 7);
-        assert_eq!(week.buckets[0].by_model["model"].input, 100);
-        assert_eq!(week.buckets[0].by_model["model"].agent_cost, 0.25);
-        assert!(week.previous_by_model.is_empty());
-        assert!(!week.comparison_available);
-        let month =
-            get_token_trend_for_agents(&conn, "30d", &["codex".into()], &now.to_rfc3339()).unwrap();
-        assert_eq!(month.buckets.len(), 30);
-        assert_eq!(month.buckets[23].by_model["model"].input, 100);
+    fn token_trend_calendar_days_keep_midnight_boundaries() {
+        for (month, day, hour) in [(10, 5, 12), (3, 10, 12), (11, 3, 0)] {
+            let now = Local
+                .with_ymd_and_hms(2026, month, day, hour, 0, 0)
+                .unwrap();
+            for (range, days) in [("7d", 7), ("30d", 30)] {
+                let conn = setup_db();
+                let start_date = now.date_naive() - chrono::Days::new(days - 1);
+                let midnight = |date: chrono::NaiveDate| {
+                    date.and_hms_opt(0, 0, 0)
+                        .unwrap()
+                        .and_local_timezone(Local)
+                        .unwrap()
+                };
+                let start = midnight(start_date);
+                let next = midnight(start_date.succ_opt().unwrap());
+                let previous_start = midnight(start_date - chrono::Days::new(days));
+                let previous_end = (now.naive_local() - chrono::Days::new(days))
+                    .and_local_timezone(Local)
+                    .unwrap();
+                let cases = [
+                    ("before", start - Duration::seconds(1), 999),
+                    ("first", start, 100),
+                    ("last-second", next - Duration::seconds(1), 1),
+                    ("next-midnight", next, 20),
+                    ("now", now, 30),
+                    ("future", now + Duration::seconds(1), 999),
+                    ("previous-start", previous_start, 40),
+                    ("previous-last", previous_end - Duration::seconds(1), 50),
+                    ("previous-cutoff", previous_end, 999),
+                ];
+                let mut logs = cases
+                    .into_iter()
+                    .map(|(id, time, count)| {
+                        make_log_at(
+                            "codex",
+                            "model",
+                            TokenType::Input,
+                            count,
+                            id,
+                            time.with_timezone(&Utc).to_rfc3339(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                logs[1].cost = Some(0.25);
+                batch_insert_token_logs(&conn, &logs).unwrap();
+                let trend =
+                    get_token_trend_for_agents(&conn, range, &["codex".into()], &now.to_rfc3339())
+                        .unwrap();
+                assert_eq!(trend.buckets.len(), days as usize);
+                for (index, bucket) in trend.buckets.iter().enumerate() {
+                    let date = start_date + chrono::Days::new(index as u64);
+                    assert_eq!(bucket.start, midnight(date).timestamp());
+                    assert_eq!(bucket.end, midnight(date.succ_opt().unwrap()).timestamp());
+                }
+                assert_eq!(trend.buckets[0].by_model["model"].input, 101);
+                assert_eq!(trend.buckets[0].by_model["model"].agent_cost, 0.25);
+                assert_eq!(trend.buckets[1].by_model["model"].input, 20);
+                assert_eq!(trend.buckets.last().unwrap().by_model["model"].input, 30);
+                assert_eq!(trend.previous_by_model["model"].input, 90);
+                assert!(trend.comparison_available);
+            }
+        }
     }
 
     fn make_log(agent: &str, model: &str, tt: TokenType, count: i64, req_id: &str) -> TokenLog {
@@ -962,34 +1047,60 @@ mod tests {
     }
 
     #[test]
-    fn test_rolling_ranges_use_current_local_time() {
+    fn test_calendar_ranges_match_summary_and_trend() {
         let conn = setup_db();
         let now = Local::now();
+        let start = (now.date_naive() - chrono::Days::new(6))
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_local_timezone(Local)
+            .unwrap();
+        let mut first = make_log_at(
+            "codex",
+            "model",
+            TokenType::Input,
+            100,
+            "first",
+            start.to_rfc3339(),
+        );
+        first.cost = Some(0.25);
         let logs = vec![
+            first,
             make_log_at(
                 "codex",
-                "codex",
+                "model",
                 TokenType::Input,
-                100,
-                "req-in-7d",
-                (now - Duration::days(6)).to_rfc3339(),
+                900,
+                "before",
+                (start - Duration::seconds(1)).to_rfc3339(),
             ),
             make_log_at(
                 "codex",
-                "codex",
+                "model",
                 TokenType::Input,
-                900,
-                "req-out-7d",
-                (now - Duration::days(8)).to_rfc3339(),
+                999,
+                "future",
+                (now + Duration::days(1)).to_rfc3339(),
             ),
         ];
         batch_insert_token_logs(&conn, &logs).unwrap();
-
-        let seven_days = get_token_summary(&conn, "7d").unwrap();
-        let thirty_days = get_token_summary(&conn, "30d").unwrap();
-
-        assert_eq!(seven_days.input, 100);
-        assert_eq!(thirty_days.input, 1000);
+        for (range, expected) in [("7d", 100), ("30d", 1000)] {
+            let summary = get_token_summary(&conn, range).unwrap();
+            let trend =
+                get_token_trend_for_agents(&conn, range, &["codex".into()], &now.to_rfc3339())
+                    .unwrap();
+            let trend_total: i64 = trend
+                .buckets
+                .iter()
+                .flat_map(|bucket| bucket.by_model.values())
+                .map(|entry| entry.input)
+                .sum();
+            assert_eq!(summary.total, expected);
+            assert_eq!(summary.by_model["model"].input, expected);
+            assert_eq!(summary.by_agent["codex"].input, expected);
+            assert_eq!(summary.agent_cost, 0.25);
+            assert_eq!(trend_total, summary.total);
+        }
     }
 
     #[test]

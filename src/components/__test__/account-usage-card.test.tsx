@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import AccountUsageCard, { formatAccountUsageMetricValue, formatAccountUsageResetTime, getAccountUsagePlanBadge } from '../AccountUsageCard';
+import AccountUsageCard, { formatAccountUsageMetricValue, formatAccountUsageResetTime, getAccountUsagePlanBadge, getResetCreditEntries } from '../AccountUsageCard';
 import type { AccountUsageProviderInfo, AccountUsageSnapshot } from '../../types';
 
 vi.mock('react-i18next', () => ({
@@ -100,6 +100,28 @@ describe('AccountUsageCard', () => {
         expect(markup).toContain('45.0%');
         expect(markup).toContain('usage-progress-fill');
         expect(markup).toContain('usage-reset-time');
+    });
+
+    it('逐笔额度按绝对到期时间排序并兼容旧缓存', () => {
+        const base = { unit: 'reset_credit', label: 'Reset credit', scope: 'workspace' as const, remaining: 1 };
+        const metrics = [
+            { ...base, metric_key: 'codex.reset_credits.available', remaining: 4 },
+            { ...base, metric_key: 'codex.reset_credits.entry.0', reset_at: '2026-10-20T01:00:00Z' },
+            { ...base, metric_key: 'codex.reset_credits.entry.1', reset_at: '2026-10-20T08:00:00+08:00' },
+            { ...base, metric_key: 'codex.reset_credits.entry.2', reset_at: 'invalid' },
+        ];
+        expect(getResetCreditEntries(metrics).map(entry => entry.metric_key)).toEqual([
+            'codex.reset_credits.entry.1', 'codex.reset_credits.entry.0', 'codex.reset_credits.entry.2',
+        ]);
+        mockUsage.value.snapshots = [makeSnapshot({ metrics })];
+        const markup = renderToStaticMarkup(<AccountUsageCard />);
+        expect(markup).toContain('2026-10-20T08:00:00+08:00');
+        expect(markup).toContain('2026-10-20T01:00:00Z');
+        expect(markup.indexOf('2026-10-20T08:00:00+08:00')).toBeLessThan(markup.indexOf('2026-10-20T01:00:00Z'));
+        expect(markup).toContain('Expiration unavailable');
+        expect(markup).toContain('1 credit details unavailable');
+        mockUsage.value.snapshots = [makeSnapshot({ metrics: [metrics[0]] })];
+        expect(renderToStaticMarkup(<AccountUsageCard />)).toContain('4 credit details unavailable');
     });
 
     it('渲染 stale 状态', () => {

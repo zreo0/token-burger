@@ -198,6 +198,8 @@ struct CreditsSnapshot {
 struct ResetCreditsSummary {
     available_count: u64,
     next_expires_at: Option<String>,
+    /** 每笔可用重置额度的到期时间，未知时间保留为空 */
+    expirations: Vec<Option<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -907,6 +909,9 @@ fn rate_limits_to_metrics(rate_limits: &[RateLimitSnapshot]) -> Vec<AccountUsage
     metrics
 }
 
+/**
+ * 将可用总数及逐笔到期时间写入指标，参数为指标列表和接口汇总，无返回值
+ */
 fn append_reset_credit_metric(
     metrics: &mut Vec<AccountUsageMetric>,
     reset_credits: Option<ResetCreditsSummary>,
@@ -914,10 +919,6 @@ fn append_reset_credit_metric(
     let Some(reset_credits) = reset_credits else {
         return;
     };
-    if reset_credits.available_count == 0 {
-        return;
-    }
-
     metrics.push(AccountUsageMetric {
         metric_key: "codex.reset_credits.available".to_string(),
         label: "Reset credits".to_string(),
@@ -929,6 +930,20 @@ fn append_reset_credit_metric(
         percentage: None,
         reset_at: reset_credits.next_expires_at,
     });
+    // 明细沿用指标存储链路，单笔与总数用不同 key 区分，不新增数据库表
+    for (index, expires_at) in reset_credits.expirations.into_iter().enumerate() {
+        metrics.push(AccountUsageMetric {
+            metric_key: format!("codex.reset_credits.entry.{index}"),
+            label: "Reset credit".to_string(),
+            unit: "reset_credit".to_string(),
+            scope: AccountUsageMetricScope::Workspace,
+            used: None,
+            limit: None,
+            remaining: Some(1.0),
+            percentage: None,
+            reset_at: expires_at,
+        });
+    }
 }
 
 fn parse_reset_credits_response(body: &str) -> Result<ResetCreditsSummary, AccountUsageError> {
@@ -938,6 +953,9 @@ fn parse_reset_credits_response(body: &str) -> Result<ResetCreditsSummary, Accou
     Ok(reset_credits_summary(response))
 }
 
+/**
+ * 筛选可用额度并按真实到期时刻排序，未知时间排最后，返回汇总与明细
+ */
 fn reset_credits_summary(response: ResetCreditsResponse) -> ResetCreditsSummary {
     let available = response
         .credits
@@ -951,16 +969,26 @@ fn reset_credits_summary(response: ResetCreditsResponse) -> ResetCreditsSummary 
         })
         .collect::<Vec<_>>();
     let available_count = response.available_count.unwrap_or(available.len() as u64);
-    let next_expires_at = available
+    let mut expirations = available
         .iter()
-        .filter_map(reset_credit_expiry)
-        .min_by_key(|(_, timestamp)| *timestamp)
-        .map(|(value, _)| value)
-        .or_else(|| available.iter().find_map(reset_credit_expiry_value));
+        .map(reset_credit_expiry)
+        .collect::<Vec<_>>();
+    expirations.sort_by_key(|expiry| {
+        expiry
+            .as_ref()
+            .map(|(_, timestamp)| *timestamp)
+            .unwrap_or(i64::MAX)
+    });
+    let expirations = expirations
+        .into_iter()
+        .map(|expiry| expiry.map(|(value, _)| value))
+        .collect::<Vec<_>>();
+    let next_expires_at = expirations.iter().flatten().next().cloned();
 
     ResetCreditsSummary {
         available_count,
         next_expires_at,
+        expirations,
     }
 }
 
@@ -1421,6 +1449,37 @@ mod tests {
         );
     }
 
+    /**
+     * 验证可用额度按绝对时间排序，同一时刻不去重，缺失日期排最后
+     */
+    #[test]
+    fn reset_credit_expirations_preserve_each_available_entry() {
+        let summary = parse_reset_credits_response(
+            &serde_json::json!({
+                "credits": [
+                    {"status":"available", "expires_at":"invalid"},
+                    {"status":"available", "expiresAt":"2026-07-12T09:00:00+08:00"},
+                    {"status":"redeemed", "expires_at":"2026-07-01T00:00:00Z"},
+                    {"status":"AVAILABLE", "expires_at":"2026-07-12T00:00:00Z"},
+                    {"status":"available", "expires_at":"2026-07-12T00:00:00Z"}
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(summary.available_count, 4);
+        assert_eq!(
+            summary.expirations,
+            vec![
+                Some("2026-07-12T00:00:00Z".into()),
+                Some("2026-07-12T00:00:00Z".into()),
+                Some("2026-07-12T09:00:00+08:00".into()),
+                None,
+            ]
+        );
+        assert_eq!(summary.next_expires_at, summary.expirations[0]);
+    }
+
     #[test]
     fn test_append_reset_credit_metric() {
         let mut metrics = Vec::new();
@@ -1429,13 +1488,17 @@ mod tests {
             Some(ResetCreditsSummary {
                 available_count: 2,
                 next_expires_at: Some("2026-07-12T00:00:00Z".to_string()),
+                expirations: vec![Some("2026-07-12T00:00:00Z".to_string()), None],
             }),
         );
 
-        assert_eq!(metrics.len(), 1);
+        assert_eq!(metrics.len(), 3);
         assert_eq!(metrics[0].metric_key, "codex.reset_credits.available");
         assert_eq!(metrics[0].remaining, Some(2.0));
         assert_eq!(metrics[0].reset_at.as_deref(), Some("2026-07-12T00:00:00Z"));
+        assert_eq!(metrics[1].metric_key, "codex.reset_credits.entry.0");
+        assert_eq!(metrics[1].reset_at, metrics[0].reset_at);
+        assert_eq!(metrics[2].reset_at, None);
     }
 
     #[test]

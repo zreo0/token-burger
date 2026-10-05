@@ -1,6 +1,6 @@
 .account-usage-card {
     border-top: 1px solid var(--popup-line);
-    padding-top: 10px;
+    padding-top: 12px;
 }
 
 .usage-card-header, .usage-provider-heading, .usage-provider-title-row, .usage-provider-actions {
@@ -14,21 +14,25 @@
 }
 
 .usage-card-header {
-    margin-bottom: 8px;
+    min-height: 24px;
+    margin-bottom: 4px;
 }
 
 .usage-card-grid {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 0;
 }
 
 .usage-provider-card {
     min-width: 0;
-    padding: 9px 12px;
-    background: var(--popup-raised);
-    border: 1px solid var(--popup-line);
-    border-radius: 12px;
+    padding: 4px 0 0;
+}
+
+.usage-provider-card + .usage-provider-card {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--popup-line);
 }
 
 .usage-provider-heading {
@@ -48,7 +52,7 @@
 
 .usage-plan-badge {
     padding: 0 6px;
-    border-radius: 5px;
+    border-radius: 4px;
     background: #ffffff0b;
     color: var(--popup-muted);
     font-size: 10px;
@@ -63,18 +67,19 @@
     display: grid;
     place-items: center;
     flex-shrink: 0;
-    width: 24px;
-    height: 24px;
-    padding: 2px;
+    width: 28px;
+    height: 28px;
+    padding: 0;
     background: transparent;
     border: 0;
-    border-radius: 5px;
+    border-radius: var(--popup-radius-control);
     color: var(--popup-muted) !important;
 }
 
 .usage-refresh-icon svg {
-    width: 20px;
-    height: 20px;
+    display: block;
+    width: 18px;
+    height: 18px;
 }
 
 .usage-expand svg {
@@ -83,15 +88,7 @@
 }
 
 .usage-refresh-icon:hover, .usage-expand:hover {
-    background: #ffffff0d;
-}
-
-.usage-provider-actions .usage-refresh-icon {
-    opacity: 0;
-}
-
-.usage-provider-card:hover .usage-refresh-icon, .usage-provider-card:focus-within .usage-refresh-icon, .usage-provider-actions .usage-refresh-icon:disabled {
-    opacity: 1;
+    background: var(--popup-hover);
 }
 
 .usage-quota-list {
@@ -102,10 +99,10 @@
 
 .usage-quota-metric {
     display: grid;
-    grid-template-columns: 66px minmax(30px, 1fr) 115px;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
-    gap: 10px;
-    font-size: 11px;
+    gap: 6px 12px;
+    font-size: 12px;
 }
 
 .usage-metric-label {
@@ -113,24 +110,29 @@
 }
 
 .usage-metric-stats {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
+    display: contents;
 }
 
 .usage-metric-value {
+    grid-column: 2;
+    grid-row: 1;
+    text-align: right;
     font-size: 12px;
 }
 
 .usage-reset-time {
+    grid-column: 1 / -1;
+    grid-row: 3;
     color: var(--popup-muted);
-    font-size: 9px;
+    font-size: 11px;
     line-height: 1.4;
 }
 
 .usage-progress-track {
-    height: 6px;
-    border-radius: 8px;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    height: 5px;
+    border-radius: 3px;
     overflow: hidden;
     background: #ffffff19;
 }
@@ -153,16 +155,21 @@
 }
 
 .usage-credit-detail {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 4px 12px;
     border-top: 1px solid var(--popup-line);
-    margin-top: 9px;
+    margin-top: 8px;
     padding-top: 8px;
 }
 
-.usage-credit-detail > div {
-    display: flex;
-    justify-content: space-between;
+.usage-credit-count {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
     font-size: 11px;
-    gap: 12px;
 }
 
 .usage-credit-detail strong {
@@ -176,17 +183,65 @@
 }
 
 .usage-credit-detail p {
-    margin-top: 2px;
+    margin: 0;
+    margin-left: auto;
+    text-align: right;
+}
+
+.usage-credit-expirations {
+    margin: 8px 0;
+}
+
+.usage-credit-expirations h3 {
+    margin-bottom: 4px;
+    color: var(--popup-text);
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.usage-credit-expirations ol {
+    list-style: none;
+}
+
+.usage-credit-expirations li {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    padding: 4px 0;
+}
+
+.usage-credit-expirations time {
+    color: var(--popup-text);
 }
 
 .usage-extra-details {
-    margin-top: 8px;
+    margin-top: 2px;
 }
 
 .usage-extra-details summary {
     cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 28px;
     width: fit-content;
-    border-radius: 3px;
+    list-style: none;
+    border-radius: 4px;
+}
+
+.usage-extra-details summary::-webkit-details-marker {
+    display: none;
+}
+
+.usage-extra-details summary svg {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+}
+
+.usage-extra-details[open] summary svg {
+    transform: rotate(90deg);
 }
 
 .usage-extra-details p {

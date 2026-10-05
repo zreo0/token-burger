@@ -40,8 +40,19 @@ export default function TrendChart({ trend, pricing, range, loading, error, onRe
     const format = metric === 'tokens' ? formatTokenCount : formatCost;
     const dateFormat = new Intl.DateTimeFormat(i18n?.language ?? 'en', range === 'today'
         ? { hour: '2-digit', minute: '2-digit', hour12: false }
-        : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+        : { month: 'numeric', day: 'numeric' });
     const selected = active === null ? undefined : buckets[active];
+    /**
+     * 生成时间桶说明，日桶展示完整自然日边界，末桶提示今天尚未结束
+     */
+    const bucketLabel = (index: number): string => {
+        const bucket = buckets[index];
+        const date = dateFormat.format(bucket.start * 1000);
+        const interval = range === 'today'
+            ? `${date} – ${dateFormat.format(bucket.end * 1000)}`
+            : `${date} 00:00 – 24:00${index === buckets.length - 1 ? ` · ${t('popup.todayIncomplete')}` : ''}`;
+        return `${interval} · ${format(values[index])}`;
+    };
 
     return (
         <section className="trend-section" aria-busy={loading}>
@@ -64,19 +75,19 @@ export default function TrendChart({ trend, pricing, range, loading, error, onRe
                         <div className="chart-bars" onMouseLeave={() => setActive(null)}>
                             {buckets.map((bucket, index) => (
                                 <button key={bucket.start} type="button" className="chart-bar-hit"
-                                    aria-label={`${dateFormat.format(bucket.start * 1000)} – ${dateFormat.format(bucket.end * 1000)}: ${format(values[index])}`}
+                                    aria-label={bucketLabel(index)}
                                     onMouseEnter={() => setActive(index)} onFocus={() => setActive(index)} onBlur={() => setActive(null)}>
                                     <span className="chart-bar" style={{ height: `${values[index] / max * 100}%` }} />
                                 </button>
                             ))}
                         </div>
                     )}
-                    {selected && !loading && !error && <div className="chart-tooltip" role="status">{dateFormat.format(selected.start * 1000)} – {dateFormat.format(selected.end * 1000)} · {format(values[active!])}</div>}
+                    {selected && !loading && !error && <div className="chart-tooltip" role="status">{bucketLabel(active!)}</div>}
                 </div>
                 <div className="chart-times">
                     <span>{buckets.length ? dateFormat.format(buckets[0].start * 1000) : '—'}</span>
                     <span>{buckets.length ? dateFormat.format(buckets[Math.floor(buckets.length / 2)].start * 1000) : ''}</span>
-                    <span>{t('popup.now')}</span>
+                    <span>{range === 'today' ? t('popup.now') : buckets.length ? `${dateFormat.format(buckets[buckets.length - 1].start * 1000)} · ${t('popup.today')}` : '—'}</span>
                 </div>
             </div>
         </section>

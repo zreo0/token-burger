@@ -73,7 +73,6 @@ export function Popup() {
     const [source, setSource] = useState<'model' | 'agent'>('model');
     const [showAll, setShowAll] = useState(false);
     const [settingsError, setSettingsError] = useState(false);
-    const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
     const [pricing, setPricing] = useState<PricingTable>({});
     const [pricingReady, setPricingReady] = useState(false);
     const [colorTheme, setColorTheme] = useState(DEFAULT_THEME_ID);
@@ -150,7 +149,6 @@ export function Popup() {
         invoke<TokenTrend>('get_token_trend', { range }).then(data => {
             if (!disposed) {
                 setTrendResult({ range, data });
-                setUpdatedAt(new Date());
             }
         }).catch(() => {
             if (!disposed) setTrendError(true);
@@ -234,7 +232,7 @@ export function Popup() {
                 <header className="popup-header">
                     <div className="popup-brand"><span className="burger-logo" aria-hidden="true"><i /><i /><i /><i /></span><h1>TokenBurger</h1></div>
                     <button className="icon-button" type="button" onClick={openSettings} aria-label={t('popup.settings')} title={t('popup.settings')}>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m9 3-1 3-3 1 1 3-2 2 2 2-1 3 3 1 1 3h4l1-3 3-1-1-3 2-2-2-2 1-3-3-1-1-3Z" /><circle cx="11" cy="12" r="3" /></svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M19.518 9.264 L21.703 9.581 L21.703 14.419 L19.518 14.736 L18.128 17.142 L18.947 19.193 L14.756 21.613 L13.389 19.878 L10.611 19.878 L9.244 21.613 L5.053 19.193 L5.872 17.142 L4.482 14.736 L2.297 14.419 L2.297 9.581 L4.482 9.264 L5.872 6.858 L5.053 4.807 L9.244 2.387 L10.611 4.122 L13.389 4.122 L14.756 2.387 L18.947 4.807 L18.128 6.858 Z" /><circle cx="12" cy="12" r="3" /></svg>
                     </button>
                 </header>
                 {settingsError && <p className="inline-error" role="alert">{t('popup.settingsError')}</p>}
@@ -263,12 +261,12 @@ export function Popup() {
                     <div className="summary-item">
                         <span className="summary-label">{t('popup.total')}</span>
                         <span className="summary-value" title={summary?.total.toLocaleString()}>{error ? '—' : isSummaryLoading ? <span className="skeleton-pulse" /> : formatTokenCount(summary?.total ?? 0, true)}</span>
-                        <span className="summary-change">{(!coldStart || coldStart.done) && !error && !loading && !trendLoading && !trendError && tokenChange ? t(range === 'today' ? 'popup.dailyChange' : 'popup.periodChange', { change: tokenChange }) : t(coldStart && !coldStart.done ? 'popup.startupIncomplete' : 'popup.localRecords')}</span>
+                        <span className="summary-change">{(!coldStart || coldStart.done) && !error && !loading && !trendError && tokenChange ? t(range === 'today' ? 'popup.dailyChange' : 'popup.periodChange', { change: tokenChange }) : t(coldStart && !coldStart.done ? 'popup.startupIncomplete' : 'popup.localRecords')}</span>
                     </div>
                     <div className="summary-item">
                         <span className="summary-label">{t('popup.cost')}</span>
                         <span className="summary-value cost" title={t('popup.costHint')}>{error ? '—' : isCostLoading ? <span className="skeleton-pulse" /> : formatCost(cost)}</span>
-                        <span className="summary-change">{(!coldStart || coldStart.done) && !error && !loading && !trendLoading && !trendError && costChange ? costChange : t('popup.estimated')}</span>
+                        <span className="summary-change">{(!coldStart || coldStart.done) && !error && !loading && !trendError && costChange ? costChange : t('popup.estimated')}</span>
                     </div>
                 </section>
                 <TrendChart trend={trend} pricing={pricing} range={range} loading={(trendLoading && !trend) || !pricingReady} error={trendError} onRetry={() => setTrendRetry(value => value + 1)} />
@@ -294,7 +292,6 @@ export function Popup() {
                     {!loading && !error && allSources.length > 2 && <button className="text-button" type="button" aria-expanded={showAll} onClick={() => setShowAll(value => !value)}>{t(showAll ? 'popup.showLess' : 'popup.showAll')} <span aria-hidden="true">{showAll ? '⌃' : '›'}</span></button>}
                 </section>
                 <AccountUsageCard />
-                <footer className="popup-footer"><span>{updatedAt ? t('popup.updatedAt', { time: updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) }) : t('popup.localRecords')}</span><span>{t('popup.localOnly')}</span></footer>
             </div>
         </div>
     );

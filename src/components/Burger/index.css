@@ -1,7 +1,7 @@
 .burger-stack {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 3px;
 }
 
 .burger-layer {
@@ -9,27 +9,25 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto 42px;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     min-height: 26px;
-    padding: 0 20px;
-    border-radius: 8px;
+    padding: 0 14px;
+    border-radius: 6px;
     color: #090704;
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 12px;
+    font-weight: 500;
     font-variant-numeric: tabular-nums;
-    box-shadow: inset 0 1px 0 #ffffff25, 0 2px 2px #00000018;
-    background-image: linear-gradient(110deg, #ffffff0d, transparent 55%, #00000008);
 }
 
 .burger-layer--top {
-    min-height: 44px;
-    padding-top: 14px;
-    border-radius: 50% 50% 9px 9px / 75% 75% 10px 10px;
+    min-height: 36px;
+    padding-top: 7px;
+    border-radius: 48px 48px 6px 6px / 18px 18px 6px 6px;
 }
 
 .burger-layer--bottom {
-    min-height: 34px;
-    border-radius: 7px 7px 28px 28px;
+    min-height: 30px;
+    border-radius: 6px 6px 18px 18px;
 }
 
 .layer-label {
@@ -43,7 +41,8 @@
 }
 
 .layer-percent {
-    font-weight: 500;
+    font-size: 11px;
+    font-weight: 400;
 }
 
 .burger-empty {
@@ -54,22 +53,22 @@
     position: absolute;
     left: 15%;
     right: 15%;
-    top: 10px;
+    top: 6px;
     display: flex;
     justify-content: space-between;
     pointer-events: none;
 }
 
 .sesame i {
-    width: 9px;
-    height: 3px;
+    width: 6px;
+    height: 2px;
     border-radius: 50%;
     background: #fff0c2b3;
     transform: rotate(-18deg);
 }
 
 .sesame i:nth-child(even) {
-    transform: translateY(4px) rotate(26deg);
+    transform: translateY(2px) rotate(26deg);
 }
 
 .sesame i:nth-child(3n) {

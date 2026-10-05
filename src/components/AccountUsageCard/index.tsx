@@ -7,6 +7,7 @@ import type { AccountUsageMetric, AccountUsageProviderInfo, AccountUsageSnapshot
 import './index.css';
 
 const RESET_CREDIT_METRIC_KEY = 'codex.reset_credits.available';
+const RESET_CREDIT_ENTRY_PREFIX = 'codex.reset_credits.entry.';
 
 const PLAN_BADGE_LABELS: Record<string, Record<string, string>> = {
     codex: {
@@ -77,6 +78,21 @@ function isQuotaMetric(metric: AccountUsageMetric): boolean {
 
 function isResetCreditMetric(metric: AccountUsageMetric): boolean {
     return metric.metric_key === RESET_CREDIT_METRIC_KEY || metric.unit === 'reset_credit';
+}
+
+/**
+ * 从指标中取出逐笔重置额度，按实际到期时刻升序排列，未知时间排最后
+ */
+export function getResetCreditEntries(metrics: AccountUsageMetric[]): AccountUsageMetric[] {
+    /**
+     * 将指标的到期时间转为排序值，缺失或无效日期返回 Infinity
+     */
+    const expiryTime = (metric: AccountUsageMetric): number => {
+        const time = Date.parse(metric.reset_at ?? '');
+        return Number.isFinite(time) ? time : Infinity;
+    };
+    return metrics.filter(metric => metric.metric_key.startsWith(RESET_CREDIT_ENTRY_PREFIX))
+        .sort((a, b) => expiryTime(a) - expiryTime(b));
 }
 
 function getAccountUsageMetricLabel(metric: AccountUsageMetric, t: Translate): string {
@@ -200,6 +216,7 @@ function ProviderUsageCard({
     refreshError,
     t,
     now,
+    language,
 }: {
     snapshot: AccountUsageSnapshot;
     provider?: AccountUsageProviderInfo;
@@ -208,12 +225,19 @@ function ProviderUsageCard({
     t: Translate;
     now: Date;
     refreshError?: string;
+    language?: string;
 }) {
     const metrics = snapshot.metrics ?? [];
     const quotaMetrics = metrics.filter(isQuotaMetric);
     const summaryMetrics = metrics.filter(metric => !isQuotaMetric(metric) && !isResetCreditMetric(metric));
     const hasError = snapshot.status === 'error' || snapshot.status === 'auth_required' || snapshot.status === 'forbidden';
-    const resetCreditMetric = metrics.find(isResetCreditMetric);
+    const resetCreditMetric = metrics.find(metric => metric.metric_key === RESET_CREDIT_METRIC_KEY)
+        ?? metrics.find(metric => isResetCreditMetric(metric) && !metric.metric_key.startsWith(RESET_CREDIT_ENTRY_PREFIX));
+    const creditEntries = getResetCreditEntries(metrics);
+    const missingCreditEntries = Math.max(0, (resetCreditMetric?.remaining ?? 0) - creditEntries.length);
+    const expiryFormat = new Intl.DateTimeFormat(language, {
+        year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+    });
     const creditExpiry = resetCreditMetric ? localizedResetTime(resetCreditMetric.reset_at, now, t) : null;
     const [expanded, setExpanded] = useState(true);
     const planBadge = getAccountUsagePlanBadge(snapshot.provider_id, snapshot.plan);
@@ -247,7 +271,7 @@ function ProviderUsageCard({
                     )}
                     {resetCreditMetric && (
                         <div className="usage-credit-detail">
-                            <div><span>{t('usage.availableResets', 'Available resets')}</span><strong>{formatAccountUsageMetricValue(resetCreditMetric)}</strong></div>
+                            <span className="usage-credit-count">{t('usage.availableResets', 'Available resets')} <strong>{formatAccountUsageMetricValue(resetCreditMetric)}</strong></span>
                             {creditExpiry && <p>{t('usage.creditExpires', 'Next credit expires in {{time}}', { time: creditExpiry })}</p>}
                         </div>
                     )}
@@ -262,7 +286,23 @@ function ProviderUsageCard({
                         </div>
                     )}
                     <details className="usage-extra-details">
-                        <summary>{t('usage.details', 'Details')}</summary>
+                        <summary><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg>{t('usage.details', 'Details')}</summary>
+                        {resetCreditMetric && (creditEntries.length > 0 || missingCreditEntries > 0) && (
+                            <div className="usage-credit-expirations">
+                                <h3>{t('usage.creditExpirations', 'Reset credit expiration dates')}</h3>
+                                <ol>
+                                    {creditEntries.map((entry, index) => (
+                                        <li key={entry.metric_key}>
+                                            <span>{t('usage.creditEntry', 'Credit {{index}}', { index: index + 1 })}</span>
+                                            {entry.reset_at && Number.isFinite(Date.parse(entry.reset_at))
+                                                ? <time dateTime={entry.reset_at}>{expiryFormat.format(new Date(entry.reset_at))}</time>
+                                                : <span>{t('usage.creditExpiryUnknown', 'Expiration unavailable')}</span>}
+                                        </li>
+                                    ))}
+                                </ol>
+                                {missingCreditEntries > 0 && <p>{t('usage.creditDetailsMissing', '{{count}} credit details unavailable; refresh to update', { count: missingCreditEntries })}</p>}
+                            </div>
+                        )}
                         {snapshot.account_label && <p>{snapshot.account_label}</p>}
                         <p>{t('popup.updatedAt', 'Updated {{time}}', { time: new Date(snapshot.observed_at).toLocaleString() })}</p>
                         {quotaMetrics.filter(metric => metric.limit != null && metric.unit !== 'percent').map(metric => <p key={metric.metric_key}>{metric.label}: {metric.used ?? '—'} / {metric.limit} {metric.unit}</p>)}
@@ -274,7 +314,7 @@ function ProviderUsageCard({
 }
 
 export default function AccountUsageCard() {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const { snapshots, providers, refreshing, refreshingProviders, providerErrors, refreshAll, refreshProvider } = useAccountUsageContext();
     const [now, setNow] = useState(() => new Date());
     const enabledProviderIds = new Set(providers.filter(provider => provider.enabled).map(provider => provider.id));
@@ -296,8 +336,8 @@ export default function AccountUsageCard() {
     return (
         <section className="account-usage-card">
             <div className="usage-card-header">
-                <span>{t('usage.title', 'Account Usage')}</span>
-                <RefreshIconButton refreshing={refreshing} onClick={refreshAll} t={t} />
+                <h2>{t('usage.title', 'Account Usage')}</h2>
+                {enabledProviderIds.size > 1 && <RefreshIconButton refreshing={refreshing} onClick={refreshAll} t={t} />}
             </div>
 
             <div className="usage-card-grid">
@@ -322,6 +362,7 @@ export default function AccountUsageCard() {
                         refreshProvider={refreshProvider}
                         t={t}
                         now={now}
+                        language={i18n?.language}
                     />
                 ))}
             </div>

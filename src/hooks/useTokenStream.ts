@@ -28,13 +28,14 @@ export function useTokenStream() {
         }
     }, [range]);
 
-    const refresh = useCallback(() => fetchSummary(false), [fetchSummary]);
+    // 重新打开弹窗和手动刷新保留当前数据，仅在首次查询或范围切换时显示占位
+    const refresh = useCallback(() => fetchSummary(true), [fetchSummary]);
 
     useEffect(() => {
-        void refresh();
+        void fetchSummary(false);
         // 范围切换和卸载后，旧请求不得覆盖新范围的数据
         return () => { requestId.current += 1; };
-    }, [refresh]);
+    }, [fetchSummary]);
 
     useEffect(() => {
         const unlisten = listen<TokenSummary>('token-updated', (event) => {
