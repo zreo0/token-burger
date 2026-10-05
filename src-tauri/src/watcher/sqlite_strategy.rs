@@ -944,10 +944,20 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE message (session_id TEXT, time_created INTEGER, time_updated INTEGER);
             INSERT INTO message VALUES ('new', 110, 110), ('updated', 10, 120), ('inactive', 10, 10), (NULL, 130, 130);").unwrap();
-        let agents: Vec<Box<dyn AgentPipeline>> = vec![Box::new(crate::adapters::opencode::OpenCodeAdapter), Box::new(crate::adapters::mimocode::MiMoCodeAdapter)];
+        let agents: Vec<Box<dyn AgentPipeline>> = vec![
+            Box::new(crate::adapters::opencode::OpenCodeAdapter),
+            Box::new(crate::adapters::mimocode::MiMoCodeAdapter),
+        ];
         for agent in agents {
             let ids = agent.list_recent_sqlite_session_ids(&conn, 100).unwrap();
-            assert_eq!(ids, vec![crate::adapters::SQLITE_NULL_SESSION_ID.to_string(), "new".to_string(), "updated".to_string()]);
+            assert_eq!(
+                ids,
+                vec![
+                    crate::adapters::SQLITE_NULL_SESSION_ID.to_string(),
+                    "new".to_string(),
+                    "updated".to_string()
+                ]
+            );
         }
     }
 
