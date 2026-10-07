@@ -162,7 +162,8 @@ fn run_cli_refresh(
             &mut slave_fd,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &mut size,
+            // macOS 要求可写指针，Linux 接收只读指针，显式原始指针兼容两种签名
+            &raw mut size,
         )
     } != 0
     {
