@@ -32,11 +32,20 @@ pub(crate) fn reindex_claude_file(
     tx.commit()
 }
 
+// Codex 升级后重读时只识别旧键，不改写旧记录；新事件仍按会话身份独立去重
 const INSERT_TOKEN_LOG_SQL: &str = "
     INSERT INTO token_logs
     (agent_name, provider, model_id, token_type, token_count,
      session_id, request_id, latency_ms, is_error, metadata, cost, timestamp)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+    SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
+    WHERE NOT (
+        ?1 = 'codex' AND COALESCE(?7 LIKE 'codex:%', 0)
+        AND EXISTS (
+            SELECT 1 FROM token_logs
+            WHERE agent_name = 'codex' AND token_type = ?4
+                AND request_id = 'codex-' || ?12 || '-' || ?4
+        )
+    )
     ON CONFLICT(request_id, token_type) DO UPDATE SET
         agent_name = excluded.agent_name,
         provider = excluded.provider,

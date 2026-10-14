@@ -43,7 +43,22 @@ impl TokenExtractor for CodexAdapter {
             }
             _ => DEFAULT_CODEX_MODEL,
         };
-        let parsed = parse_content_with_model(content, initial_model);
+        // 增量可能不含 session_meta，复用 Watcher 已读取的文件头，不依赖项目目录
+        let context = match batch {
+            AgentDataBatch::JsonlIncrement {
+                behavior_context, ..
+            } => behavior_context.as_deref().unwrap_or(content),
+            _ => content,
+        };
+        let session_id = parse_session_id(context).unwrap_or_else(|| {
+            // 旧日志缺少元数据时使用 rollout 文件名，目录移动不改变标识
+            std::path::Path::new(batch.source_key())
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        });
+        let parsed = parse_content_with_model(content, initial_model, &session_id);
 
         TokenExtraction {
             logs: parsed.logs,
@@ -74,7 +89,31 @@ impl BehaviorExtractor for CodexAdapter {
     }
 }
 
-pub(crate) fn parse_content_with_model(content: &str, initial_model: &str) -> CodexParseResult {
+/**
+ * 从已读取的文本返回首个会话元数据的 ID，避免采用子代理回放中的父会话 ID
+ */
+fn parse_session_id(content: &str) -> Option<String> {
+    content
+        .lines()
+        .find_map(|line| {
+            let value: serde_json::Value = serde_json::from_str(line).ok()?;
+            (value.get("type")?.as_str()? == "session_meta").then_some(value)
+        })?
+        .get("payload")?
+        .get("id")?
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
+/**
+ * 按稳定会话 ID 解析用量文本和初始模型，返回日志、最终模型及回放状态
+ */
+pub(crate) fn parse_content_with_model(
+    content: &str,
+    initial_model: &str,
+    session_id: &str,
+) -> CodexParseResult {
     let mut logs = Vec::new();
     let mut saw_session_meta = false;
     let mut replay_pending = false;
@@ -115,7 +154,7 @@ pub(crate) fn parse_content_with_model(content: &str, initial_model: &str) -> Co
                     continue;
                 }
 
-                if let Some(parsed) = parse_codex_line(&val, &now, &current_model) {
+                if let Some(parsed) = parse_codex_line(&val, &now, &current_model, session_id) {
                     logs.extend(parsed);
                 }
             }
@@ -158,10 +197,14 @@ fn parse_turn_model(val: &serde_json::Value) -> Option<&str> {
         .filter(|model| !model.is_empty())
 }
 
+/**
+ * 将单个用量事件转换为会话内可去重的 token 日志，缺少时间时使用展示用回退时间
+ */
 fn parse_codex_line(
     val: &serde_json::Value,
     fallback_ts: &str,
     current_model: &str,
+    session_id: &str,
 ) -> Option<Vec<TokenLog>> {
     // 仅处理 event_msg/token_count 事件，且使用单次请求的 last_token_usage。
     if val.get("type").and_then(|v| v.as_str()) != Some("event_msg") {
@@ -213,7 +256,17 @@ fn parse_codex_line(
         .and_then(|v| v.as_str())
         .unwrap_or(fallback_ts)
         .to_string();
-    let request_id = format!("codex-{}", timestamp);
+    // JSON 数组避免字段拼接歧义，用量快照区分同毫秒事件；不使用路径、模型或读取时间
+    // 累计用量还能区分连续两次消耗相同的请求，重复上报同一快照则保持同一标识
+    let event_key = serde_json::json!([
+        session_id,
+        val.get("timestamp"),
+        payload
+            .get("info")
+            .and_then(|info| info.get("total_token_usage")),
+        usage,
+    ]);
+    let request_id = format!("codex:{event_key}");
     let model = current_model.to_string();
 
     let make_log = |token_type: TokenType, token_count: i64, suffix: &str| TokenLog {
@@ -223,7 +276,7 @@ fn parse_codex_line(
         model_id: model.clone(),
         token_type,
         token_count,
-        session_id: None,
+        session_id: Some(session_id.to_string()),
         request_id: Some(format!("{}-{}", request_id, suffix)),
         latency_ms: None,
         is_error: false,
@@ -249,6 +302,136 @@ fn parse_codex_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /**
+     * 按会话 ID 和累计用量生成同一时间戳的日志，每个事件消耗 10 个输入 token
+     */
+    fn session_content(session_id: &str, total: i64) -> String {
+        format!(
+            "{}\n{}\n",
+            serde_json::json!({"type": "session_meta", "payload": {"id": session_id, "cwd": "/old/project"}}),
+            serde_json::json!({
+                "timestamp": "2026-10-13T10:00:00.123Z",
+                "type": "event_msg",
+                "payload": {"type": "token_count", "info": {
+                    "total_token_usage": {"input_tokens": total, "total_tokens": total},
+                    "last_token_usage": {"input_tokens": 10, "total_tokens": 10}
+                }}
+            })
+        )
+    }
+
+    /**
+     * 创建独立内存数据库，用于验证解析结果经过真实写入路径后的去重和汇总
+     */
+    fn usage_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::SCHEMA_SQL).unwrap();
+        conn
+    }
+
+    /**
+     * 验证相同时刻的并发会话分别入库，项目目录及日志路径变化后重读不会增加总量
+     */
+    #[test]
+    fn concurrent_sessions_survive_dedup_and_project_moves() {
+        let conn = usage_db();
+        for session_id in ["session-a", "session-b"] {
+            let content = session_content(session_id, 10);
+            let logs = CodexAdapter.extract_tokens(&jsonl_batch(&content)).logs;
+            crate::db::queries::batch_insert_token_logs(&conn, &logs).unwrap();
+
+            let mut moved = jsonl_batch(&content.replace("/old/project", "/new/project"));
+            if let AgentDataBatch::JsonlIncrement {
+                source_key, path, ..
+            } = &mut moved
+            {
+                *source_key = "/new/project/renamed.jsonl".into();
+                *path = source_key.clone().into();
+            }
+            let reread = CodexAdapter.extract_tokens(&moved).logs;
+            assert_eq!(logs[0].request_id, reread[0].request_id);
+            assert_eq!(reread[0].session_id.as_deref(), Some(session_id));
+            crate::db::queries::batch_insert_token_logs(&conn, &reread).unwrap();
+        }
+        let result: (i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), SUM(token_count) FROM token_logs",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(result, (2, 20));
+    }
+
+    /**
+     * 验证同会话同毫秒的不同请求均保留，重复快照和完整重读均不增加统计
+     */
+    #[test]
+    fn same_timestamp_requests_use_usage_snapshots() {
+        let conn = usage_db();
+        let content = format!(
+            "{}{}{}",
+            session_content("a", 10),
+            session_content("a", 20),
+            session_content("a", 20)
+        );
+        let logs = CodexAdapter.extract_tokens(&jsonl_batch(&content)).logs;
+        assert_ne!(logs[0].request_id, logs[1].request_id);
+        assert_eq!(logs[1].request_id, logs[2].request_id);
+        for _ in 0..2 {
+            crate::db::queries::batch_insert_token_logs(&conn, &logs).unwrap();
+        }
+        let total: i64 = conn
+            .query_row("SELECT SUM(token_count) FROM token_logs", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(total, 20);
+    }
+
+    /**
+     * 验证升级重读不新增或修改旧记录，之后同一时刻的两个会话仍能独立入库
+     */
+    #[test]
+    fn legacy_usage_is_preserved_without_blocking_new_concurrent_events() {
+        let conn = usage_db();
+        let old_content = session_content("a", 10);
+        let logs = CodexAdapter.extract_tokens(&jsonl_batch(&old_content)).logs;
+        let mut legacy = logs[0].clone();
+        legacy.request_id = Some(format!("codex-{}-input", legacy.timestamp));
+        legacy.session_id = None;
+        legacy.token_count = 99;
+        crate::db::queries::batch_insert_token_logs(&conn, &[legacy]).unwrap();
+        crate::db::queries::batch_insert_token_logs(&conn, &logs).unwrap();
+
+        for id in ["a", "b"] {
+            let content = session_content(id, 20).replace("10:00:00.123", "10:00:01.123");
+            let logs = CodexAdapter.extract_tokens(&jsonl_batch(&content)).logs;
+            crate::db::queries::batch_insert_token_logs(&conn, &logs).unwrap();
+        }
+        let result: (i64, i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), SUM(token_count), SUM(session_id IS NULL) FROM token_logs",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(result, (3, 119, 1));
+    }
+
+    /**
+     * 验证缺失时间戳时重读标识稳定，展示时间变化不影响去重
+     */
+    #[test]
+    fn missing_timestamp_does_not_use_read_time_as_identity() {
+        let value = serde_json::json!({"type": "event_msg", "payload": {
+            "type": "token_count", "info": {"last_token_usage": {"input_tokens": 10}}
+        }});
+        let first = parse_codex_line(&value, "2026-10-13T10:00:00Z", "gpt-5.5", "a").unwrap();
+        let second = parse_codex_line(&value, "2026-10-13T11:00:00Z", "gpt-5.5", "a").unwrap();
+        assert_eq!(first[0].request_id, second[0].request_id);
+    }
 
     fn jsonl_batch(content: &str) -> AgentDataBatch {
         AgentDataBatch::JsonlIncrement {
@@ -280,10 +463,8 @@ mod tests {
         assert_eq!(logs[1].token_count, 7808);
         assert_eq!(logs[2].token_type, TokenType::Output);
         assert_eq!(logs[2].token_count, 112);
-        assert_eq!(
-            logs[2].request_id.as_deref(),
-            Some("codex-2026-01-14T07:23:24.629Z-output")
-        );
+        assert!(logs[2].request_id.as_deref().unwrap().starts_with("codex:"));
+        assert_eq!(logs[2].session_id.as_deref(), Some("session.jsonl"));
     }
 
     #[test]

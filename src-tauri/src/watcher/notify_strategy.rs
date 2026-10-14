@@ -630,11 +630,15 @@ mod tests {
         assert_eq!(cache.get(&path_str).map(String::as_str), Some("gpt-5.5"));
     }
 
+    /**
+     * 验证跨增量过滤父会话回放，缓存增量和移动后的完整重读保持子会话标识一致
+     */
     #[test]
     fn codex_thread_spawn_waits_for_live_boundary_across_increments() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("subagent.jsonl");
-        let replay = r#"{"type":"session_meta","payload":{"source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}}}
+        let replay = r#"{"type":"session_meta","payload":{"id":"child","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}}}
+{"type":"session_meta","payload":{"id":"parent"}}
 {"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
 {"timestamp":"2026-08-12T09:00:17.609Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":999}}}}
 "#;
@@ -665,10 +669,48 @@ mod tests {
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].token_count, 7);
         assert_eq!(logs[0].model_id, "gpt-5.6-sol");
+        assert_eq!(logs[0].session_id.as_deref(), Some("child"));
         assert_eq!(
             cache.get(&path_str).map(String::as_str),
             Some("gpt-5.6-sol")
         );
+
+        let next = live
+            .replace("inter_agent_communication_metadata", "ignored")
+            .replace("09:00:30.731", "09:00:31.731");
+        file.write_all(next.as_bytes()).unwrap();
+        let batch = build_changed_batch(
+            &path,
+            &path_str,
+            (replay.len() + live.len()) as u64,
+            "codex",
+            &mut cache,
+        )
+        .unwrap();
+        let incremental = extract_codex_logs(&adapter, &batch, &mut cache);
+        assert_eq!(incremental.len(), 1);
+        assert_eq!(incremental[0].session_id.as_deref(), Some("child"));
+
+        let moved = dir.path().join("moved.jsonl");
+        std::fs::rename(&path, &moved).unwrap();
+        let batch =
+            build_changed_batch(&moved, &moved.to_string_lossy(), 0, "codex", &mut cache).unwrap();
+        let reread = extract_codex_logs(&adapter, &batch, &mut cache);
+        assert_eq!(reread.len(), 2);
+        assert_eq!(reread[0].request_id, logs[0].request_id);
+        assert_eq!(reread[1].request_id, incremental[0].request_id);
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::SCHEMA_SQL).unwrap();
+        for batch in [&logs, &incremental, &reread] {
+            crate::db::queries::batch_insert_token_logs(&conn, batch).unwrap();
+        }
+        let total: i64 = conn
+            .query_row("SELECT SUM(token_count) FROM token_logs", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(total, 14);
     }
 
     #[test]
