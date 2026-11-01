@@ -210,15 +210,11 @@ fn resize_popup_window(app: AppHandle, height: f64) -> Result<(), String> {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            // macOS: 隐藏 Dock 图标，仅在菜单栏显示
-            #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-
             // 初始化数据库
             let db_path = db::get_db_path(app.handle());
             db::init_db(&db_path).expect("数据库初始化失败");
@@ -446,6 +442,16 @@ pub fn run() {
             resize_popup_window,
             restart_app,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    #[cfg(target_os = "macos")]
+    let app = {
+        let mut app = app;
+        // 在事件循环启动前设置菜单栏应用策略，避免先以普通应用注册 Dock 图标
+        app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+        app
+    };
+
+    app.run(|_, _| {});
 }
