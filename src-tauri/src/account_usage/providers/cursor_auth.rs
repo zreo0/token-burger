@@ -4,9 +4,7 @@ use base64::{engine::general_purpose, Engine};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::account_usage::credentials::{
-    with_keychain_interaction, CredentialMetadata, CredentialStore,
-};
+use crate::account_usage::credentials::{CredentialMetadata, CredentialStore};
 use crate::account_usage::{AccountUsageError, AccountUsageStatus};
 
 /** Cursor 的本机凭据副本与旧版手填 Cookie 使用不同引用 */
@@ -178,6 +176,7 @@ fn open_token(stored: &str, allow_interaction: bool) -> Result<String, AccountUs
     }
     #[cfg(target_os = "macos")]
     {
+        use crate::account_usage::credentials::with_keychain_interaction;
         use security_framework::item::{ItemClass, ItemSearchOptions, SearchResult};
         let password = with_keychain_interaction(allow_interaction, || {
             ItemSearchOptions::new()
