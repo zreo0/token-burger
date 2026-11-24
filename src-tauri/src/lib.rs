@@ -433,6 +433,7 @@ pub fn run() {
             commands::refresh_account_usage_all,
             commands::refresh_account_usage_provider,
             commands::save_account_usage_credential,
+            commands::authorize_account_usage_provider,
             commands::clear_account_usage_credential,
             commands::get_account_usage_provider_state,
             commands::set_account_usage_provider_enabled,

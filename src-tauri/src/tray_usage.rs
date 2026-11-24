@@ -219,6 +219,7 @@ fn provider_icon_bytes(provider_id: &str) -> Option<&'static [u8]> {
     match provider_id {
         "codex" => Some(include_bytes!("../icons/provider-menubar/codex.pdf")),
         "claude-code" => Some(include_bytes!("../icons/provider-menubar/claude-code.pdf")),
+        // 菜单栏沿用 PDF，避免依赖旧版 macOS 对 SVG 和 em 尺寸的解析
         "cursor" => Some(include_bytes!("../icons/provider-menubar/cursor.pdf")),
         "github-copilot" => Some(include_bytes!(
             "../icons/provider-menubar/github-copilot.pdf"
@@ -241,6 +242,19 @@ fn best_provider_percentage(provider_id: &str, snapshots: &[AccountUsageSnapshot
     snapshots
         .iter()
         .filter(|snapshot| snapshot.provider_id == provider_id)
+        // Cursor 授权失效后卡片与菜单栏均停止展示旧额度，普通网络失败仍保留缓存
+        .filter(|snapshot| {
+            provider_id != "cursor"
+                || !matches!(
+                    snapshot
+                        .error
+                        .as_ref()
+                        .map(|error| &error.code)
+                        .unwrap_or(&snapshot.status),
+                    crate::account_usage::AccountUsageStatus::AuthRequired
+                        | crate::account_usage::AccountUsageStatus::CredentialUnavailable
+                )
+        })
         .flat_map(|snapshot| snapshot.metrics.iter())
         .filter_map(metric_percentage)
         .max_by(|a, b| a.total_cmp(b))
@@ -266,6 +280,28 @@ mod tests {
     use crate::account_usage::{
         AccountUsageConfidence, AccountUsageMetricScope, AccountUsageSource, AccountUsageStatus,
     };
+
+    /**
+     * 共享池明细不参与额度汇总，授权失效时不继续展示缓存百分比
+     */
+    #[test]
+    fn cursor_tray_ignores_product_share_and_expired_quota() {
+        let mut snapshot: AccountUsageSnapshot = serde_json::from_value(serde_json::json!({
+            "provider_id":"cursor", "account_key":"test", "status":"ok",
+            "source":"internal_api", "confidence":"medium", "stale":false,
+            "observed_at":"2026-11-24T00:00:00Z", "metrics":[
+                {"metric_key":"cursor.shared", "label":"Shared", "unit":"percent", "scope":"account", "percentage":42},
+                {"metric_key":"cursor.product.grok_bot", "label":"Grok Bot", "unit":"percent_share", "scope":"account", "used":90}
+            ]
+        })).unwrap();
+        assert_eq!(provider_usage_title("cursor", &[snapshot.clone()]), "42%");
+        snapshot.status = AccountUsageStatus::Stale;
+        snapshot.error = Some(crate::account_usage::AccountUsageError::new(
+            AccountUsageStatus::AuthRequired,
+            "重新授权",
+        ));
+        assert_eq!(provider_usage_title("cursor", &[snapshot]), "--%");
+    }
 
     #[test]
     fn test_provider_usage_title_uses_highest_percentage() {

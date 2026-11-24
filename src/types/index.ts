@@ -134,7 +134,7 @@ export type AccountUsageCapability =
     | 'local_tokens' | 'account_usage' | 'account_quota'
     | 'cost_estimate' | 'multi_account' | 'official_api'
     | 'internal_api' | 'cookie_required' | 'auth_file_required'
-    | 'token_required';
+    | 'token_required' | 'local_credential_import';
 
 export type AccountUsageSource =
     | 'local_logs' | 'auth_file' | 'official_api'

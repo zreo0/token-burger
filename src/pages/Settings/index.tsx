@@ -18,6 +18,8 @@ import claudeCodeProviderIcon from '../../assets/provider-icons/claude-code.svg'
 import openaiProviderIcon from '../../assets/provider-icons/openai.svg';
 import githubCopilotProviderIcon from '../../assets/provider-icons/github-copilot.svg';
 import opencodeProviderIcon from '../../assets/provider-icons/opencode.svg';
+import cursorProviderIcon from '../../assets/provider-icons/cursor.svg';
+import AccountAuthorization, { needsAccountAuthorization } from '../../components/AccountAuthorization';
 import './index.css';
 
 type Tab = 'general' | 'agents' | 'alerts' | 'data' | 'usage' | 'about';
@@ -33,12 +35,13 @@ const TAB_ICON_PATHS: Record<Tab, string> = {
 };
 
 // 账号用量 Provider 逐个开放，菜单栏展示仅对可计算百分比的 Provider 启用。
-const VISIBLE_USAGE_PROVIDER_IDS = new Set(['codex', 'claude-code', 'github-copilot', 'opencode-go']);
+const VISIBLE_USAGE_PROVIDER_IDS = new Set(['codex', 'claude-code', 'cursor', 'github-copilot', 'opencode-go']);
 const USAGE_PROVIDER_ICONS: Record<string, string> = {
     codex: openaiProviderIcon,
     'claude-code': claudeCodeProviderIcon,
     'github-copilot': githubCopilotProviderIcon,
     'opencode-go': opencodeProviderIcon,
+    cursor: cursorProviderIcon,
 };
 
 type UpdateStatus =
@@ -72,6 +75,7 @@ function canShowProviderInMenuBar(provider: AccountUsageProviderInfo): boolean {
  * 根据账号配置返回简短的状态翻译键
  */
 function usageProviderStatusKey(provider: AccountUsageProviderInfo): string {
+    if (provider.capabilities.includes('local_credential_import') && !provider.available) return 'usage.authorizationNeeded';
     if (provider.enabled) return 'settings.enabled';
     if (provider.available) return 'usage.available';
     return 'settings.notDetected';
@@ -90,6 +94,8 @@ function Settings() {
         setMenuBarVisible,
         saveCredential,
         clearCredential,
+        snapshots: usageSnapshots,
+        authorizingProviders,
     } = useAccountUsageContext();
     const [tab, setTab] = useState<Tab>('general');
     const [loadError, setLoadError] = useState(false);
@@ -541,12 +547,19 @@ function Settings() {
                                                 : t('usage.enableProviderFirst', 'Enable account usage first');
                                         const accountUsageHint = provider.available
                                             ? t('usage.refreshEvery', { seconds: provider.refresh_interval_secs })
-                                            : provider.credential_requirements?.length > 0
-                                                ? t('usage.requiresCredential', 'Requires credential')
-                                                : t('usage.notDetected', 'Auth file or credential not detected');
+                                            : provider.capabilities.includes('local_credential_import')
+                                                ? t('usage.localAuthEnableHint', 'Enabling imports your local login and may request system permission')
+                                                : provider.credential_requirements?.length > 0
+                                                    ? t('usage.requiresCredential', 'Requires credential')
+                                                    : t('usage.notDetected', 'Auth file or credential not detected');
                                         const shouldShowCredentialForm = provider.credential_requirements?.length > 0
                                             && (!provider.available || provider.id === 'claude-code');
-                                        const statusKey = usageProviderStatusKey(provider);
+                                        const usageSnapshot = usageSnapshots.find(snapshot => snapshot.provider_id === provider.id);
+                                        const needsLocalAuth = provider.capabilities.includes('local_credential_import')
+                                            && (!provider.available || needsAccountAuthorization(usageSnapshot));
+                                        const statusKey = provider.enabled && needsLocalAuth
+                                            ? provider.available ? 'usage.authorizationExpired' : 'usage.authorizationNeeded'
+                                            : usageProviderStatusKey(provider);
 
                                         return (
                                             <div key={provider.id}>
@@ -562,7 +575,7 @@ function Settings() {
                                                         <div className="usage-provider-title-stack">
                                                             <div className="usage-provider-title-line">
                                                                 <span className="usage-provider-compact-name">{provider.display_name}</span>
-                                                                <span className={`usage-provider-status-badge ${provider.enabled ? 'enabled' : ''}`}>
+                                                                <span className={`usage-provider-status-badge ${provider.enabled && !needsLocalAuth ? 'enabled' : ''}`}>
                                                                     {t(statusKey)}
                                                                 </span>
                                                             </div>
@@ -571,10 +584,11 @@ function Settings() {
                                                             )}
                                                         </div>
                                                     </div>
-                                                    <label className="usage-provider-switch-cell" title={accountUsageHint}>
+                                                    <label className={`usage-provider-switch-cell ${authorizingProviders[provider.id] ? 'disabled' : ''}`} title={accountUsageHint}>
                                                         <input
                                                             type="checkbox"
                                                             checked={provider.enabled}
+                                                            disabled={!!authorizingProviders[provider.id]}
                                                             onChange={(e) => { const enabled = e.target.checked; void runSettingsAction(() => setUsageEnabled(provider.id, enabled)); }}
                                                             aria-label={`${provider.display_name} ${t('usage.accountUsageShort', 'Usage')}`}
                                                         />
@@ -591,6 +605,13 @@ function Settings() {
                                                         <span className="usage-provider-checkmark" />
                                                     </label>
                                                 </div>
+                                                {provider.enabled && provider.capabilities.includes('local_credential_import') && (
+                                                    <div className="usage-local-authorization">
+                                                        <AccountAuthorization provider={provider}
+                                                            snapshot={usageSnapshot}
+                                                            showConnected />
+                                                    </div>
+                                                )}
                                                 {shouldShowCredentialForm && (
                                                     <details className="credential-disclosure" open={!provider.available}>
                                                         <summary>{t('settings.credentials')}<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg></summary>

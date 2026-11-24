@@ -163,16 +163,18 @@ pub fn upsert_snapshot(
     for metric in &snapshot.metrics {
         insert_metric(&tx, snapshot_id, metric)?;
     }
-    // Claude 当前只读取一份活动凭据，成功切换后移除旧账号及旧版本本地占位快照
-    if snapshot.provider_id == "claude-code" && snapshot.status == AccountUsageStatus::Ok {
+    // 只读取一份活动凭据的 Provider 在切换后移除旧账号，避免混合两个账号的额度
+    if matches!(snapshot.provider_id.as_str(), "claude-code" | "cursor")
+        && snapshot.status == AccountUsageStatus::Ok
+    {
         tx.execute(
             "DELETE FROM account_usage_metrics WHERE snapshot_id IN
-             (SELECT id FROM account_usage_snapshots WHERE provider_id = 'claude-code' AND id != ?1)",
-            [snapshot_id],
+             (SELECT id FROM account_usage_snapshots WHERE provider_id = ?2 AND id != ?1)",
+            params![snapshot_id, snapshot.provider_id],
         )?;
         tx.execute(
-            "DELETE FROM account_usage_snapshots WHERE provider_id = 'claude-code' AND id != ?1",
-            [snapshot_id],
+            "DELETE FROM account_usage_snapshots WHERE provider_id = ?2 AND id != ?1",
+            params![snapshot_id, snapshot.provider_id],
         )?;
     }
     tx.commit()
@@ -402,20 +404,48 @@ pub fn mark_provider_snapshots_stale(
     error: &AccountUsageError,
 ) -> Result<(), rusqlite::Error> {
     let redacted_message = redact_secret_text(&error.message);
+    // 授权失效只能由成功刷新或重新授权解除，离线与限流不能使旧额度重新出现
+    let preserve_auth_error = provider_id == "cursor"
+        && !matches!(
+            error.code,
+            AccountUsageStatus::AuthRequired | AccountUsageStatus::CredentialUnavailable
+        );
     conn.execute(
         "UPDATE account_usage_snapshots
          SET status = ?1, stale = 1, error_code = ?2, error_message = ?3,
              retry_after_secs = ?4, updated_at = CURRENT_TIMESTAMP
-         WHERE provider_id = ?5",
+         WHERE provider_id = ?5
+           AND NOT (?6 AND COALESCE(error_code, '') IN ('auth_required', 'credential_unavailable'))",
         params![
             enum_to_db(&AccountUsageStatus::Stale),
             enum_to_db(&error.code),
             redacted_message,
             error.retry_after_secs.map(|value| value as i64),
             provider_id,
+            preserve_auth_error,
         ],
     )?;
     Ok(())
+}
+
+/**
+ * 删除指定 Provider 的旧快照及指标，重新授权后不得混用先前账号的额度
+ */
+pub fn delete_provider_snapshots(
+    conn: &Connection,
+    provider_id: &str,
+) -> Result<(), rusqlite::Error> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "DELETE FROM account_usage_metrics WHERE snapshot_id IN
+        (SELECT id FROM account_usage_snapshots WHERE provider_id = ?1)",
+        [provider_id],
+    )?;
+    tx.execute(
+        "DELETE FROM account_usage_snapshots WHERE provider_id = ?1",
+        [provider_id],
+    )?;
+    tx.commit()
 }
 
 #[cfg(test)]

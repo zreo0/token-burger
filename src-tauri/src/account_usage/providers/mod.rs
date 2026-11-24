@@ -1,6 +1,7 @@
 pub mod claude_code;
 pub mod codex;
 pub mod cursor;
+mod cursor_auth;
 pub mod github_copilot;
 pub mod opencode_go;
 

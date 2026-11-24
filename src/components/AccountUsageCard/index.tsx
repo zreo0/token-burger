@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useAccountUsageContext } from '../../context/AccountUsageContext';
 import { formatTokenCount } from '../../utils/format';
+import AccountAuthorization, { needsAccountAuthorization } from '../AccountAuthorization';
+import cursorProviderIcon from '../../assets/provider-icons/cursor.svg';
 import type { AccountUsageMetric, AccountUsageProviderInfo, AccountUsageSnapshot } from '../../types';
 import './index.css';
 
@@ -96,12 +98,34 @@ export function getResetCreditEntries(metrics: AccountUsageMetric[]): AccountUsa
 }
 
 function getAccountUsageMetricLabel(metric: AccountUsageMetric, t: Translate): string {
+    if (metric.metric_key === 'cursor.shared') return t('usage.sharedPool', 'Shared weekly usage');
+    if (metric.metric_key === 'cursor.auto') return t('usage.cursorModels', 'Cursor Models');
+    if (metric.metric_key === 'cursor.api') return t('usage.otherModels', 'Other Models');
     if (isResetCreditMetric(metric)) {
         return t('usage.resetCredits', 'Reset credits');
     }
     const window = metric.label.match(/^(\d+)(h|d) window$/);
     if (window) return t(window[2] === 'h' ? 'usage.hourWindow' : 'usage.dayWindow', metric.label, { count: Number(window[1]) });
     return metric.label;
+}
+
+/**
+ * 展示共享额度内的产品消耗，参数为产品指标和翻译器，未知数值不显示为零
+ */
+function UsageBreakdown({ metrics, t }: { metrics: AccountUsageMetric[]; t: Translate }) {
+    return (
+        <div className="usage-product-breakdown">
+            {metrics.map(metric => (
+                <div className="usage-product-row" key={metric.metric_key}>
+                    <span>{metric.label}</span>
+                    <span>{metric.used == null
+                        ? t('usage.breakdownUnavailable', 'Details unavailable')
+                        : t('usage.shareOfPool', '{{percent}}% of shared allowance', { percent: metric.used.toFixed(1) })}</span>
+                </div>
+            ))}
+            <p>{t('usage.includedInShared', 'Included in the shared usage above')}</p>
+        </div>
+    );
 }
 
 /**
@@ -196,14 +220,19 @@ function EmptyProviderCard({
     return (
         <article className="usage-provider-card empty">
             <div className="usage-provider-heading">
-                <span className="usage-provider-name">{provider.display_name}</span>
+                <div className="usage-provider-title-row">
+                    {provider.id === 'cursor' && <img className="usage-provider-logo" src={cursorProviderIcon} alt="" />}
+                    <span className="usage-provider-name">{provider.display_name}</span>
+                </div>
                 <RefreshIconButton refreshing={refreshing} onClick={() => refreshProvider(provider.id)} t={t} />
             </div>
-            <p className={errorMessage ? 'usage-error-text' : 'usage-muted-text'}>
+            {provider.capabilities.includes('local_credential_import') ? (
+                <AccountAuthorization provider={provider} showConnected />
+            ) : <p className={errorMessage ? 'usage-error-text' : 'usage-muted-text'}>
                 {errorMessage || (provider.available
                     ? t('usage.noData', 'No account usage data yet')
                     : t('usage.notDetected', 'Auth file or credential not detected'))}
-            </p>
+            </p>}
         </article>
     );
 }
@@ -229,8 +258,14 @@ function ProviderUsageCard({
 }) {
     const metrics = snapshot.metrics ?? [];
     const quotaMetrics = metrics.filter(isQuotaMetric);
-    const summaryMetrics = metrics.filter(metric => !isQuotaMetric(metric) && !isResetCreditMetric(metric));
-    const hasError = snapshot.status === 'error' || snapshot.status === 'auth_required' || snapshot.status === 'forbidden';
+    const summaryMetrics = metrics.filter(metric => !isQuotaMetric(metric) && !isResetCreditMetric(metric) && metric.unit !== 'percent_share');
+    const productMetrics = metrics.filter(metric => metric.unit === 'percent_share');
+    const sharedMetric = metrics.find(metric => metric.metric_key === 'cursor.shared');
+    const cursorLegacy = snapshot.provider_id === 'cursor' && metrics.some(metric => metric.metric_key === 'cursor.auto' || metric.metric_key === 'cursor.api');
+    const needsAuthorization = provider?.capabilities.includes('local_credential_import')
+        && (!provider.available || needsAccountAuthorization(snapshot));
+    const hasError = snapshot.status === 'error' || snapshot.status === 'auth_required' || snapshot.status === 'forbidden'
+        || (metrics.length === 0 && !!snapshot.error);
     const resetCreditMetric = metrics.find(metric => metric.metric_key === RESET_CREDIT_METRIC_KEY)
         ?? metrics.find(metric => isResetCreditMetric(metric) && !metric.metric_key.startsWith(RESET_CREDIT_ENTRY_PREFIX));
     const creditEntries = getResetCreditEntries(metrics);
@@ -243,32 +278,43 @@ function ProviderUsageCard({
     const planBadge = getAccountUsagePlanBadge(snapshot.provider_id, snapshot.plan);
 
     return (
-        <article className="usage-provider-card">
+        <article className={`usage-provider-card${snapshot.provider_id === 'cursor' ? ' cursor-usage-card' : ''}`}>
             <div className="usage-provider-heading">
                 <div className="usage-provider-title-row">
+                    {snapshot.provider_id === 'cursor' && <img className="usage-provider-logo" src={cursorProviderIcon} alt="" />}
                     <span className="usage-provider-name">{provider?.display_name || snapshot.provider_id}</span>
                     {planBadge && <span className="usage-plan-badge">{planBadge}</span>}
+                    {(sharedMetric || cursorLegacy) && <span className="usage-plan-kind">{sharedMetric ? t('usage.sharedPlan', 'Shared plan') : t('usage.legacyPlan', 'Legacy plan')}</span>}
                     {snapshot.stale && <span className="usage-stale-text">{t('usage.stale', 'Stale')}</span>}
                 </div>
                 <div className="usage-provider-actions">
                     <RefreshIconButton refreshing={refreshing} onClick={() => refreshProvider(snapshot.provider_id)} t={t} />
-                    <button className="usage-expand" type="button" aria-label={t(expanded ? 'usage.collapse' : 'usage.expand', expanded ? 'Collapse account details' : 'Expand account details')} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
+                    {!hasError && !needsAuthorization && <button className="usage-expand" type="button" aria-label={t(expanded ? 'usage.collapse' : 'usage.expand', expanded ? 'Collapse account details' : 'Expand account details')} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d={expanded ? 'm3 6 5 5 5-5' : 'm6 3 5 5-5 5'} /></svg>
-                    </button>
+                    </button>}
                 </div>
             </div>
 
-            {hasError ? (
+            {needsAuthorization && provider ? (
+                <AccountAuthorization provider={provider} snapshot={snapshot} />
+            ) : hasError ? (
                 <p className="usage-error-text">{snapshot.error?.message || snapshot.status}</p>
             ) : expanded ? (
                 <>
                     {quotaMetrics.length > 0 && (
-                        <div className="usage-quota-list">
+                        <div className={`usage-quota-list${sharedMetric ? ' usage-shared-pool' : ''}`}>
                             {quotaMetrics.map(metric => (
                                 <QuotaMetric key={`${metric.metric_key}-${metric.scope}`} metric={metric} now={now} t={t} />
                             ))}
+                            {sharedMetric && (
+                                <div className="usage-shared-caption">
+                                    <span>{t('usage.sharedProducts', 'Cursor · Grok Bot · Grok')}</span>
+                                    {sharedMetric.remaining != null && <span>{t('usage.remainingPercent', '{{percent}}% left', { percent: sharedMetric.remaining.toFixed(1) })}</span>}
+                                </div>
+                            )}
                         </div>
                     )}
+                    {sharedMetric && productMetrics.length > 0 && <UsageBreakdown metrics={productMetrics} t={t} />}
                     {resetCreditMetric && (
                         <div className="usage-credit-detail">
                             <span className="usage-credit-count">{t('usage.availableResets', 'Available resets')} <strong>{formatAccountUsageMetricValue(resetCreditMetric)}</strong></span>
@@ -315,7 +361,7 @@ function ProviderUsageCard({
 
 export default function AccountUsageCard() {
     const { t, i18n } = useTranslation();
-    const { snapshots, providers, refreshing, refreshingProviders, providerErrors, refreshAll, refreshProvider } = useAccountUsageContext();
+    const { snapshots, providers, refreshing, refreshingProviders, authorizingProviders, providerErrors, refreshAll, refreshProvider } = useAccountUsageContext();
     const [now, setNow] = useState(() => new Date());
     const enabledProviderIds = new Set(providers.filter(provider => provider.enabled).map(provider => provider.id));
     const visibleSnapshots = snapshots.filter(snapshot => enabledProviderIds.has(snapshot.provider_id));
@@ -346,7 +392,7 @@ export default function AccountUsageCard() {
                         key={`${provider.id}-empty`}
                         provider={provider}
                         errorMessage={providerErrors[provider.id]}
-                        refreshing={!!refreshingProviders[provider.id]}
+                        refreshing={!!refreshingProviders[provider.id] || !!authorizingProviders?.[provider.id]}
                         refreshProvider={refreshProvider}
                         t={t}
                     />
@@ -357,7 +403,7 @@ export default function AccountUsageCard() {
                         key={`${snapshot.provider_id}-${snapshot.account_key}`}
                         snapshot={snapshot}
                         provider={providers.find(provider => provider.id === snapshot.provider_id)}
-                        refreshing={!!refreshingProviders[snapshot.provider_id]}
+                        refreshing={!!refreshingProviders[snapshot.provider_id] || !!authorizingProviders?.[snapshot.provider_id]}
                         refreshError={providerErrors[snapshot.provider_id]}
                         refreshProvider={refreshProvider}
                         t={t}

@@ -40,6 +40,7 @@ export function useAccountUsage() {
     const [refreshing, setRefreshing] = useState(false);
     const [refreshingProviders, setRefreshingProviders] = useState<Record<string, boolean>>({});
     const [providerErrors, setProviderErrors] = useState<Record<string, string>>({});
+    const [authorizingProviders, setAuthorizingProviders] = useState<Record<string, boolean>>({});
 
     const loadData = useCallback(async () => {
         setIsLoading(true);
@@ -65,6 +66,16 @@ export function useAccountUsage() {
         const setupListener = async () => {
             unlistenSnapshots = await listen<AccountUsageSnapshot[]>('account-usage-updated', (event) => {
                 setSnapshots(prev => mergeAccountUsageSnapshots(prev, event.payload));
+                // 后台或其他窗口恢复成功后清理旧的操作错误，仅 available 变化不足以证明已恢复
+                setProviderErrors(prev => {
+                    const next = { ...prev };
+                    for (const snapshot of event.payload) {
+                        if (snapshot.status === 'ok' && !snapshot.stale && !snapshot.error) {
+                            delete next[snapshot.provider_id];
+                        }
+                    }
+                    return next;
+                });
             });
             unlistenProviders = await listen<AccountUsageProviderInfo[]>('account-usage-providers-updated', (event) => {
                 setProviders(event.payload);
@@ -141,12 +152,35 @@ export function useAccountUsage() {
         await refreshProvider(providerId);
     };
 
+    /**
+     * 仅响应用户点击导入本机登录，参数为服务标识，更新授权与额度状态
+     */
+    const authorizeProvider = async (providerId: string) => {
+        setAuthorizingProviders(prev => ({ ...prev, [providerId]: true }));
+        setProviderErrors(prev => ({ ...prev, [providerId]: '' }));
+        try {
+            const newSnapshots = await invoke<AccountUsageSnapshot[]>('authorize_account_usage_provider', { providerId });
+            const fetchedProviders = await invoke<AccountUsageProviderInfo[]>('list_account_usage_providers');
+            setProviders(fetchedProviders);
+            setSnapshots(prev => mergeAccountUsageSnapshots(prev, newSnapshots));
+        } catch (error) {
+            setProviderErrors(prev => ({ ...prev, [providerId]: String(error) }));
+        } finally {
+            setAuthorizingProviders(prev => ({ ...prev, [providerId]: false }));
+        }
+    };
+
     const setEnabled = async (providerId: string, enabled: boolean) => {
         await invoke('set_account_usage_provider_enabled', { request: { provider_id: providerId, enabled } });
         const fetchedProviders = await invoke<AccountUsageProviderInfo[]>('list_account_usage_providers');
         setProviders(fetchedProviders);
         if (enabled) {
-            await refreshProvider(providerId);
+            const provider = fetchedProviders.find(provider => provider.id === providerId);
+            if (provider?.capabilities.includes('local_credential_import') && !provider.available) {
+                await authorizeProvider(providerId);
+            } else {
+                await refreshProvider(providerId);
+            }
         } else {
             setSnapshots(prev => prev.filter(snapshot => snapshot.provider_id !== providerId));
             setProviderErrors(prev => {
@@ -176,6 +210,8 @@ export function useAccountUsage() {
         refreshing,
         refreshingProviders,
         providerErrors,
+        authorizingProviders,
+        authorizeProvider,
         refreshAll,
         refreshProvider,
         saveCredential,

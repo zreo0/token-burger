@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use rusqlite::Connection;
@@ -19,14 +19,16 @@ pub struct AccountUsageManager {
     db_path: PathBuf,
     providers: Vec<SharedAccountUsageProvider>,
     refresh_locks: Mutex<HashSet<String>>,
+    /** 刷新完成时唤醒等待中的主动授权 */
+    refresh_idle: Condvar,
     credentials: CredentialStore,
     refresh_timeout: Duration,
 }
 
 /// Provider 刷新结果，区分退避缓存和真实拉取结果
-enum ProviderRefreshResult {
-    Cached(Vec<AccountUsageSnapshot>),
-    Fetched(AccountUsageResult),
+enum ProviderRefreshResult<'a> {
+    Cached,
+    Fetched(AccountUsageResult, RefreshGuard<'a>),
 }
 
 impl AccountUsageManager {
@@ -39,6 +41,7 @@ impl AccountUsageManager {
             db_path,
             providers,
             refresh_locks: Mutex::new(HashSet::new()),
+            refresh_idle: Condvar::new(),
             credentials: CredentialStore::new(),
             refresh_timeout: Duration::from_secs(DEFAULT_REFRESH_TIMEOUT_SECS),
         }
@@ -106,7 +109,16 @@ impl AccountUsageManager {
             .filter(|provider| {
                 state_map
                     .get(provider.id())
-                    .map(|state| state.enabled)
+                    .map(|state| {
+                        if !state.enabled {
+                            return false;
+                        }
+                        let info = provider.info(state);
+                        // 首次启用后等待用户主动授权，后台不争抢未授权服务的刷新锁
+                        info.available || !info.capabilities.contains(
+                            &crate::account_usage::AccountUsageCapability::LocalCredentialImport,
+                        )
+                    })
                     .unwrap_or(false)
             })
             .map(|provider| provider.id().to_string())
@@ -152,7 +164,7 @@ impl AccountUsageManager {
     }
 
     /// 拉取单个 Provider 的最新用量，但不在并行阶段写数据库
-    fn fetch_provider_usage(&self, provider_id: &str) -> Result<ProviderRefreshResult, String> {
+    fn fetch_provider_usage(&self, provider_id: &str) -> Result<ProviderRefreshResult<'_>, String> {
         let provider = self
             .providers
             .iter()
@@ -160,8 +172,8 @@ impl AccountUsageManager {
             .cloned()
             .ok_or_else(|| format!("未知账号用量 Provider: {provider_id}"))?;
 
-        if let Some(snapshots) = self.rate_limit_backoff_snapshots(provider_id)? {
-            return Ok(ProviderRefreshResult::Cached(snapshots));
+        if self.rate_limit_backoff_snapshots(provider_id)?.is_some() {
+            return Ok(ProviderRefreshResult::Cached);
         }
 
         let guard = match self.try_refresh_guard(provider_id) {
@@ -175,7 +187,7 @@ impl AccountUsageManager {
                 if snapshots.is_empty() {
                     return Err(error);
                 }
-                return Ok(ProviderRefreshResult::Cached(snapshots));
+                return Ok(ProviderRefreshResult::Cached);
             }
         };
         let context = AccountUsageRefreshContext {
@@ -183,20 +195,24 @@ impl AccountUsageManager {
             credentials: self.credentials.clone(),
         };
         let result = self.refresh_with_timeout(provider, context);
-        drop(guard);
-
-        Ok(ProviderRefreshResult::Fetched(result))
+        // 锁持续到结果入库，防止旧请求在重新授权后写回旧账号数据
+        Ok(ProviderRefreshResult::Fetched(result, guard))
     }
 
     /// 顺序写入 Provider 刷新结果，避免多个线程同时写 SQLite
     fn store_provider_refresh_result(
         &self,
         provider_id: &str,
-        result: ProviderRefreshResult,
+        result: ProviderRefreshResult<'_>,
     ) -> Result<Vec<AccountUsageSnapshot>, String> {
         match result {
-            ProviderRefreshResult::Cached(snapshots) => Ok(snapshots),
-            ProviderRefreshResult::Fetched(Ok(snapshots)) => {
+            ProviderRefreshResult::Cached => {
+                // 并行任务等待期间可能已重新授权，发布时读取当前缓存，避免重发旧账号数据
+                let conn = Connection::open(&self.db_path).map_err(|error| error.to_string())?;
+                crate::account_usage::store::latest_snapshots_by_provider(&conn, provider_id)
+                    .map_err(|error| error.to_string())
+            }
+            ProviderRefreshResult::Fetched(Ok(snapshots), _guard) => {
                 let conn = Connection::open(&self.db_path).map_err(|error| error.to_string())?;
                 for snapshot in &snapshots {
                     crate::account_usage::store::upsert_snapshot(&conn, snapshot)
@@ -206,7 +222,7 @@ impl AccountUsageManager {
                     .map_err(|error| error.to_string())?;
                 Ok(snapshots)
             }
-            ProviderRefreshResult::Fetched(Err(error)) => {
+            ProviderRefreshResult::Fetched(Err(error), _guard) => {
                 self.handle_refresh_error(provider_id, error)
             }
         }
@@ -220,12 +236,53 @@ impl AccountUsageManager {
         secret: String,
         label: Option<String>,
     ) -> Result<AccountUsageProviderState, String> {
+        if provider_id == "cursor" {
+            return Err("Cursor 请使用本机登录授权，无需填写 Cookie".to_string());
+        }
         let account_key = account_key.unwrap_or_else(|| "default".to_string());
         let metadata = self
             .credentials
             .save_secret(&provider_id, &account_key, &secret_kind, &secret, label)
             .map_err(|error| error.message)?;
         self.persist_credential_metadata(metadata)
+    }
+
+    /**
+     * 等待已有刷新完成，在同一把锁内导入凭据、清理旧账号并刷新，返回额度快照
+     */
+    pub fn authorize_provider(
+        &self,
+        provider_id: &str,
+    ) -> Result<Vec<AccountUsageSnapshot>, String> {
+        let provider = self.provider_by_id(provider_id)?;
+        let guard = self.wait_refresh_guard(provider_id)?;
+        let metadata = provider
+            .authorize(AccountUsageRefreshContext {
+                db_path: self.db_path.clone(),
+                credentials: self.credentials.clone(),
+            })
+            .map_err(|error| error.message)?;
+        let mut state = self.persist_credential_metadata(metadata)?;
+        state.retry_after_until = None;
+        state.auto_discovery_enabled = true;
+        let conn = Connection::open(&self.db_path).map_err(|error| error.to_string())?;
+        crate::account_usage::store::upsert_provider_state(&conn, &state)
+            .map_err(|error| error.to_string())?;
+        // 重新授权可能切换账号，先移除旧额度，后续刷新失败也不能展示另一账号的数据
+        crate::account_usage::store::delete_provider_snapshots(&conn, provider_id)
+            .map_err(|error| error.to_string())?;
+        drop(conn);
+        let result = self.refresh_with_timeout(
+            provider,
+            AccountUsageRefreshContext {
+                db_path: self.db_path.clone(),
+                credentials: self.credentials.clone(),
+            },
+        );
+        self.store_provider_refresh_result(
+            provider_id,
+            ProviderRefreshResult::Fetched(result, guard),
+        )
     }
 
     pub fn clear_credential(
@@ -246,6 +303,7 @@ impl AccountUsageManager {
         }
         state.credential_ref = None;
         state.credential_label = None;
+        state.auto_discovery_enabled = false;
         crate::account_usage::store::upsert_provider_state(&conn, &state)
             .map_err(|error| error.to_string())?;
         Ok(state)
@@ -347,6 +405,27 @@ impl AccountUsageManager {
         Ok(RefreshGuard {
             provider_id: provider_id.to_string(),
             locks: &self.refresh_locks,
+            idle: &self.refresh_idle,
+        })
+    }
+
+    /**
+     * 用户主动授权时等待指定服务的刷新和入库完成，不持有数据库连接等待
+     */
+    fn wait_refresh_guard(&self, provider_id: &str) -> Result<RefreshGuard<'_>, String> {
+        let locks = self
+            .refresh_locks
+            .lock()
+            .map_err(|_| "刷新锁已损坏".to_string())?;
+        let mut locks = self
+            .refresh_idle
+            .wait_while(locks, |locks| locks.contains(provider_id))
+            .map_err(|_| "刷新锁已损坏".to_string())?;
+        locks.insert(provider_id.to_string());
+        Ok(RefreshGuard {
+            provider_id: provider_id.to_string(),
+            locks: &self.refresh_locks,
+            idle: &self.refresh_idle,
         })
     }
 
@@ -383,6 +462,38 @@ impl AccountUsageManager {
             crate::account_usage::store::latest_snapshots_by_provider(&conn, provider_id)
                 .map_err(|error| error.to_string())?;
         if snapshots.is_empty() {
+            let provider = self.provider_by_id(provider_id)?;
+            let state = self.state_or_default(
+                &conn,
+                provider_id,
+                provider.default_refresh_interval_secs(),
+            )?;
+            let info = provider.info(&state);
+            if info
+                .capabilities
+                .contains(&crate::account_usage::AccountUsageCapability::LocalCredentialImport)
+            {
+                // 首次失败也保存结构化授权状态，使重启或另一个窗口能够展示恢复入口
+                let snapshot = AccountUsageSnapshot {
+                    provider_id: provider_id.to_string(),
+                    account_key: "pending".to_string(),
+                    account_label: None,
+                    plan: None,
+                    status: error.code.clone(),
+                    source: info.source,
+                    confidence: info.confidence,
+                    observed_at: now_rfc3339(),
+                    period_start: None,
+                    period_end: None,
+                    reset_at: None,
+                    stale: false,
+                    error: Some(error),
+                    metrics: vec![],
+                };
+                crate::account_usage::store::upsert_snapshot(&conn, &snapshot)
+                    .map_err(|error| error.to_string())?;
+                return Ok(vec![snapshot]);
+            }
             Err(redact_secret_text(&error.message))
         } else {
             Ok(snapshots)
@@ -472,12 +583,14 @@ impl AccountUsageManager {
 struct RefreshGuard<'a> {
     provider_id: String,
     locks: &'a Mutex<HashSet<String>>,
+    idle: &'a Condvar,
 }
 
 impl Drop for RefreshGuard<'_> {
     fn drop(&mut self) {
         if let Ok(mut locks) = self.locks.lock() {
             locks.remove(&self.provider_id);
+            self.idle.notify_all();
         }
     }
 }
@@ -598,6 +711,80 @@ mod tests {
     }
 
     /**
+     * 首次授权失效也应持久化结构化状态，且移除账号缓存时清除关联指标
+     */
+    #[test]
+    fn cursor_auth_failure_survives_reload_and_cache_removal() {
+        let (_temp, manager) = setup_manager();
+        let snapshots = manager
+            .handle_refresh_error(
+                "cursor",
+                AccountUsageError::new(AccountUsageStatus::AuthRequired, "请重新授权"),
+            )
+            .unwrap();
+        assert_eq!(snapshots[0].status, AccountUsageStatus::AuthRequired);
+        let conn = Connection::open(&manager.db_path).unwrap();
+        let reloaded =
+            crate::account_usage::store::latest_snapshots_by_provider(&conn, "cursor").unwrap();
+        assert_eq!(
+            reloaded[0].error.as_ref().unwrap().code,
+            AccountUsageStatus::AuthRequired
+        );
+        crate::account_usage::store::upsert_snapshot(&conn, &sample_snapshot("cursor")).unwrap();
+        crate::account_usage::store::delete_provider_snapshots(&conn, "cursor").unwrap();
+        assert!(
+            crate::account_usage::store::latest_snapshots_by_provider(&conn, "cursor")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /**
+     * 离线或限流不得解除授权失效，只有成功刷新才能恢复旧额度的可见状态
+     */
+    #[test]
+    fn cursor_auth_failure_is_sticky_until_success() {
+        let (_temp, manager) = setup_manager();
+        let conn = Connection::open(&manager.db_path).unwrap();
+        crate::account_usage::store::upsert_snapshot(&conn, &sample_snapshot("cursor")).unwrap();
+        let network = manager
+            .handle_refresh_error(
+                "cursor",
+                AccountUsageError::new(AccountUsageStatus::Network, "离线"),
+            )
+            .unwrap();
+        assert_eq!(
+            network[0].error.as_ref().unwrap().code,
+            AccountUsageStatus::Network
+        );
+        for auth_status in [
+            AccountUsageStatus::AuthRequired,
+            AccountUsageStatus::CredentialUnavailable,
+        ] {
+            manager
+                .handle_refresh_error(
+                    "cursor",
+                    AccountUsageError::new(auth_status.clone(), "需要授权"),
+                )
+                .unwrap();
+            for status in [
+                AccountUsageStatus::Network,
+                AccountUsageStatus::RateLimited,
+                AccountUsageStatus::SchemaChanged,
+            ] {
+                let result = manager
+                    .handle_refresh_error("cursor", AccountUsageError::new(status, "暂时失败"))
+                    .unwrap();
+                assert_eq!(result[0].error.as_ref().unwrap().code, auth_status);
+            }
+        }
+        crate::account_usage::store::upsert_snapshot(&conn, &sample_snapshot("cursor")).unwrap();
+        let snapshots = manager.latest_snapshots().unwrap();
+        assert_eq!(snapshots[0].status, AccountUsageStatus::Ok);
+        assert!(snapshots[0].error.is_none());
+    }
+
+    /**
      * 用固定结果替换真实 Provider 的刷新，避免管理器测试读取本机凭据
      */
     struct RefreshFixture(SharedAccountUsageProvider);
@@ -628,18 +815,91 @@ mod tests {
             true
         }
         /**
+         * 模拟用户授权而不访问真实钥匙串
+         */
+        fn authorize(
+            &self,
+            _context: AccountUsageRefreshContext,
+        ) -> Result<CredentialMetadata, AccountUsageError> {
+            Ok(CredentialMetadata {
+                provider_id: self.id().to_string(),
+                account_key: "default".into(),
+                secret_kind: "local".into(),
+                credential_ref: format!("{}:default:local", self.id()),
+                label: None,
+            })
+        }
+        /**
          * 返回一个失败和一个成功结果，用于验证刷新错误隔离
          */
-        fn refresh(&self, _context: AccountUsageRefreshContext) -> AccountUsageResult {
+        fn refresh(&self, context: AccountUsageRefreshContext) -> AccountUsageResult {
             if self.id() == "codex" {
                 Err(AccountUsageError::new(
                     AccountUsageStatus::Network,
                     "fixture error",
                 ))
             } else {
-                Ok(vec![sample_snapshot(self.id())])
+                let mut snapshot = sample_snapshot(self.id());
+                if self.id() == "cursor" {
+                    let conn = Connection::open(context.db_path).unwrap();
+                    if crate::account_usage::store::get_provider_state(&conn, "cursor")
+                        .unwrap()
+                        .unwrap()
+                        .credential_ref
+                        .is_some()
+                    {
+                        snapshot.account_key = "new-account".into();
+                    }
+                }
+                Ok(vec![snapshot])
             }
         }
+    }
+
+    /**
+     * 首次启用跳过后台刷新；主动授权等待旧结果入库，完成后只保留新账号
+     */
+    #[test]
+    fn cursor_authorization_waits_for_refresh_commit() {
+        let (_temp, mut manager) = setup_manager();
+        manager.providers = manager
+            .providers
+            .into_iter()
+            .map(|provider| Arc::new(RefreshFixture(provider)) as SharedAccountUsageProvider)
+            .collect();
+        manager
+            .set_provider_enabled("cursor".into(), true, None)
+            .unwrap();
+        assert!(manager.refresh_all_enabled().unwrap().is_empty());
+        let conn = Connection::open(&manager.db_path).unwrap();
+        crate::account_usage::store::upsert_snapshot(&conn, &sample_snapshot("cursor")).unwrap();
+        drop(conn);
+        let pending = manager.fetch_provider_usage("cursor").unwrap();
+        let cached = manager.fetch_provider_usage("cursor").unwrap();
+        assert!(manager.try_refresh_guard("cursor").is_err());
+        std::thread::scope(|scope| {
+            let (started_tx, started_rx) = mpsc::channel();
+            let manager = &manager;
+            let handle = scope.spawn(move || {
+                started_tx.send(()).unwrap();
+                manager.authorize_provider("cursor")
+            });
+            started_rx.recv().unwrap();
+            let old = manager
+                .store_provider_refresh_result("cursor", pending)
+                .unwrap();
+            assert_eq!(old[0].account_key, "account-1");
+            let fresh = handle.join().unwrap().unwrap();
+            assert_eq!(fresh[0].account_key, "new-account");
+        });
+        let saved = manager.latest_snapshots().unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].account_key, "new-account");
+        let delayed = manager
+            .store_provider_refresh_result("cursor", cached)
+            .unwrap();
+        assert_eq!(delayed[0].account_key, "new-account");
+        assert!(manager.try_refresh_guard("cursor").is_ok());
     }
 
     #[test]

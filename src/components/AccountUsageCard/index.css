@@ -50,6 +50,56 @@
     overflow-wrap: anywhere;
 }
 
+.usage-provider-logo {
+    width: 17px;
+    height: 17px;
+    filter: invert(1);
+}
+
+.usage-plan-kind {
+    color: var(--popup-muted);
+    font-size: 10px;
+}
+
+.usage-shared-pool {
+    padding: 10px 12px;
+    border-radius: var(--popup-radius-control);
+    background: var(--popup-raised);
+}
+
+.usage-shared-caption, .usage-product-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.usage-shared-caption {
+    color: var(--popup-muted);
+    font-size: 10px;
+    line-height: 1.5;
+}
+
+.usage-product-breakdown {
+    padding: 10px 12px 6px;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.usage-product-breakdown p {
+    margin-top: 4px;
+    color: var(--popup-muted);
+    font-size: 10px;
+}
+
+@media (prefers-color-scheme: light) {
+    .usage-provider-logo {
+        filter: none;
+    }
+}
+
 .usage-plan-badge {
     padding: 0 6px;
     border-radius: 4px;

@@ -428,6 +428,10 @@
     background: var(--settings-surface);
 }
 
+.settings-container .usage-local-authorization {
+    padding: 0 14px 8px 54px;
+}
+
 .settings-container .usage-provider-avatar img {
     width: 18px;
     height: 18px;

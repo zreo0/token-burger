@@ -1,0 +1,65 @@
+.account-authorization {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    padding: 12px 0;
+    color: var(--popup-text, var(--settings-text));
+}
+
+.account-authorization-copy {
+    flex: 1 1 180px;
+    min-width: 0;
+}
+
+.account-authorization-title {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.5;
+}
+
+.account-authorization-help, .account-authorization-error {
+    margin: 5px 0 0;
+    font-size: 11px;
+    line-height: 1.6;
+    color: var(--popup-muted, var(--settings-muted));
+    overflow-wrap: anywhere;
+}
+
+.account-authorization-error {
+    color: var(--settings-danger, #de8068);
+}
+
+.account-authorization-button {
+    flex-shrink: 0;
+    min-height: 30px;
+    padding: 5px 10px;
+    border: 1px solid var(--popup-line, var(--settings-line));
+    border-radius: 6px;
+    background: var(--popup-raised, var(--settings-surface));
+    color: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.account-authorization-button:hover:not(:disabled) {
+    background: var(--popup-hover, var(--settings-hover));
+}
+
+.account-authorization-button:focus-visible {
+    outline: 2px solid var(--popup-accent, var(--settings-accent));
+    outline-offset: 2px;
+}
+
+.account-authorization-button:disabled {
+    cursor: default;
+    opacity: 0.55;
+}
+
+.account-authorization.connected {
+    align-items: center;
+    padding: 6px 0;
+}

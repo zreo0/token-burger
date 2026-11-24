@@ -464,22 +464,24 @@ fn parse_oauth_credentials(
 #[cfg(target_os = "macos")]
 fn read_cli_keychain() -> Result<Option<String>, AccountUsageError> {
     use security_framework::item::{ItemClass, ItemSearchOptions, SearchResult};
-    let result = ItemSearchOptions::new()
-        .class(ItemClass::generic_password())
-        .service("Claude Code-credentials")
-        .load_data(true)
-        .skip_authenticated_items(true)
-        .search();
-    match result {
-        Ok(items) => Ok(items.into_iter().find_map(|item| match item {
-            SearchResult::Data(bytes) => String::from_utf8(bytes).ok(),
-            _ => None,
-        })),
-        Err(_) => Err(usage_error(
-            AccountUsageStatus::CredentialUnavailable,
-            "无法无交互读取 Claude 钥匙串，请手动填写 OAuth token 或 sessionKey",
-        )),
-    }
+    crate::account_usage::credentials::with_keychain_interaction(false, || {
+        let result = ItemSearchOptions::new()
+            .class(ItemClass::generic_password())
+            .service("Claude Code-credentials")
+            .load_data(true)
+            .skip_authenticated_items(true)
+            .search();
+        match result {
+            Ok(items) => Ok(items.into_iter().find_map(|item| match item {
+                SearchResult::Data(bytes) => String::from_utf8(bytes).ok(),
+                _ => None,
+            })),
+            Err(_) => Err(usage_error(
+                AccountUsageStatus::CredentialUnavailable,
+                "无法无交互读取 Claude 钥匙串，请手动填写 OAuth token 或 sessionKey",
+            )),
+        }
+    })
 }
 
 /**

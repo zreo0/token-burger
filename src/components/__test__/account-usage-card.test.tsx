@@ -84,7 +84,55 @@ describe('AccountUsageCard', () => {
             providerErrors: {},
             refreshAll: vi.fn(),
             refreshProvider: vi.fn(),
+            authorizeProvider: vi.fn(),
+            authorizingProviders: {},
         };
+    });
+
+    it('新版只有一个共享额度进度条，Grok Bot 显示占用明细', () => {
+        mockUsage.value.providers = [{ ...baseProvider, id: 'cursor', display_name: 'Cursor', capabilities: ['local_credential_import'] }];
+        mockUsage.value.snapshots = [makeSnapshot({ provider_id: 'cursor', plan: 'Ultra', metrics: [
+            { metric_key: 'cursor.shared', label: 'Shared usage', unit: 'percent', scope: 'account', percentage: 42, remaining: 58 },
+            { metric_key: 'cursor.product.grok_bot', label: 'Grok Bot', unit: 'percent_share', scope: 'account', used: 12.5 },
+        ] })];
+        const markup = renderToStaticMarkup(<AccountUsageCard />);
+        expect(markup.match(/role="progressbar"/g)).toHaveLength(1);
+        expect(markup).toContain('Shared plan');
+        expect(markup).toContain('58.0% left');
+        expect(markup).toContain('12.5% of shared allowance');
+        expect(markup).toContain('Included in the shared usage above');
+    });
+
+    it('新版缺少 Grok Bot 明细时不显示为零，旧版不展示 Grok Bot', () => {
+        mockUsage.value.providers = [{ ...baseProvider, id: 'cursor', display_name: 'Cursor', capabilities: ['local_credential_import'] }];
+        mockUsage.value.snapshots = [makeSnapshot({ provider_id: 'cursor', metrics: [
+            { metric_key: 'cursor.shared', label: 'Shared usage', unit: 'percent', scope: 'account', percentage: 42 },
+            { metric_key: 'cursor.product.grok_bot', label: 'Grok Bot', unit: 'percent_share', scope: 'account' },
+        ] })];
+        let markup = renderToStaticMarkup(<AccountUsageCard />);
+        expect(markup).toContain('Details unavailable');
+        expect(markup).not.toContain('0.0% of shared allowance');
+        mockUsage.value.snapshots = [makeSnapshot({ provider_id: 'cursor', metrics: [
+            { metric_key: 'cursor.auto', label: 'Cursor Models', unit: 'percent', scope: 'account', percentage: 20 },
+            { metric_key: 'cursor.api', label: 'Other Models', unit: 'percent', scope: 'account', percentage: 80 },
+        ] })];
+        markup = renderToStaticMarkup(<AccountUsageCard />);
+        expect(markup.match(/role="progressbar"/g)).toHaveLength(2);
+        expect(markup).toContain('Legacy plan');
+        expect(markup).not.toContain('Grok Bot');
+    });
+
+    it('授权过期展示重新授权并隐藏缓存额度，渲染不会发起授权', () => {
+        mockUsage.value.providers = [{ ...baseProvider, id: 'cursor', display_name: 'Cursor', capabilities: ['local_credential_import'] }];
+        mockUsage.value.snapshots = [makeSnapshot({ provider_id: 'cursor', status: 'stale', stale: true,
+            error: { code: 'auth_required', message: '请先在 Cursor 登录' },
+        })];
+        const markup = renderToStaticMarkup(<AccountUsageCard />);
+        expect(markup).toContain('Authorization expired');
+        expect(markup).toContain('Reauthorize');
+        expect(markup).toContain('请先在 Cursor 登录');
+        expect(markup).not.toContain('role="progressbar"');
+        expect(mockUsage.value.authorizeProvider).not.toHaveBeenCalled();
     });
 
     it('渲染正常账号用量指标', () => {
@@ -100,6 +148,19 @@ describe('AccountUsageCard', () => {
         expect(markup).toContain('45.0%');
         expect(markup).toContain('usage-progress-fill');
         expect(markup).toContain('usage-reset-time');
+    });
+
+    it.each(['network', 'rate_limited', 'schema_changed'] as const)('首次刷新 %s 失败只展示错误与重试入口', code => {
+        mockUsage.value.providers = [{ ...baseProvider, id: 'cursor', display_name: 'Cursor', capabilities: ['local_credential_import'] }];
+        mockUsage.value.snapshots = [makeSnapshot({ provider_id: 'cursor', account_key: 'pending', status: code,
+            metrics: [], error: { code, message: '额度暂不可用' },
+        })];
+        const markup = renderToStaticMarkup(<AccountUsageCard />);
+        expect(markup).toContain('额度暂不可用');
+        expect(markup).toContain('aria-label="Refresh"');
+        expect(markup).not.toContain('No account usage data yet');
+        expect(markup).not.toContain('<details');
+        expect(markup).not.toContain('Collapse account details');
     });
 
     it('逐笔额度按绝对到期时间排序并兼容旧缓存', () => {

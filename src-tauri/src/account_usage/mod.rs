@@ -20,6 +20,8 @@ pub enum AccountUsageCapability {
     CookieRequired,
     AuthFileRequired,
     TokenRequired,
+    /** 用户主动操作后导入本机应用凭据 */
+    LocalCredentialImport,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -168,6 +170,20 @@ pub trait AccountUsageProvider: Send + Sync {
     fn info(&self, state: &AccountUsageProviderState) -> AccountUsageProviderInfo;
     fn detect(&self) -> bool;
     fn refresh(&self, context: AccountUsageRefreshContext) -> AccountUsageResult;
+
+    /**
+     * 从本机应用导入凭据，参数为刷新上下文，返回系统凭据存储中的引用
+     * 仅由用户主动授权命令调用，后台刷新不得调用此方法
+     */
+    fn authorize(
+        &self,
+        _context: AccountUsageRefreshContext,
+    ) -> Result<credentials::CredentialMetadata, AccountUsageError> {
+        Err(AccountUsageError::new(
+            AccountUsageStatus::Unsupported,
+            "此服务不支持导入本机登录",
+        ))
+    }
 }
 
 pub type SharedAccountUsageProvider = Arc<dyn AccountUsageProvider>;

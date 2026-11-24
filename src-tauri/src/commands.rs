@@ -758,6 +758,31 @@ pub fn save_account_usage_credential(
     Ok(provider_state)
 }
 
+/**
+ * 在用户明确点击授权后导入本机凭据，阻塞系统对话框只在工作线程等待
+ * 参数为服务标识和应用句柄，返回不含密钥的额度快照
+ */
+#[tauri::command]
+pub async fn authorize_account_usage_provider(
+    provider_id: String,
+    app: AppHandle,
+) -> Result<Vec<AccountUsageSnapshot>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let result = state.account_usage.authorize_provider(&provider_id);
+        if let Ok(providers) = state.account_usage.provider_infos() {
+            let _ = app.emit("account-usage-providers-updated", &providers);
+        }
+        // 即使授权后的刷新失败，也同步菜单栏，避免保留已清除账号的额度
+        sync_account_usage_tray_items(&app);
+        let snapshots = redact_account_usage_snapshots(result?);
+        let _ = app.emit("account-usage-updated", &snapshots);
+        Ok(snapshots)
+    })
+    .await
+    .map_err(|_| "授权未完成，请重试".to_string())?
+}
+
 #[tauri::command]
 pub fn clear_account_usage_credential(
     provider_id: String,
