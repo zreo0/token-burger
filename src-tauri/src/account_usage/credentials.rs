@@ -1,6 +1,7 @@
 use crate::account_usage::{AccountUsageError, AccountUsageStatus};
 
-const SERVICE_NAME: &str = "dev.token-burger.account-usage";
+/** 保留既有手填凭据的存储位置，本机导入凭据使用独立应用命名空间 */
+const LEGACY_SERVICE_NAME: &str = "dev.token-burger.account-usage";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CredentialMetadata {
@@ -14,19 +15,29 @@ pub struct CredentialMetadata {
 #[derive(Clone)]
 pub struct CredentialStore {
     service_name: String,
-}
-
-impl Default for CredentialStore {
-    fn default() -> Self {
-        Self {
-            service_name: SERVICE_NAME.to_string(),
-        }
-    }
+    /** 由实际应用标识和构建模式决定，隔离正式版与开发版的本机凭据副本 */
+    local_service_name: String,
 }
 
 impl CredentialStore {
-    pub fn new() -> Self {
-        Self::default()
+    /**
+     * 根据应用标识创建凭据存储，既有手填凭据保持兼容，本机登录副本单独隔离
+     */
+    pub fn new(application_identifier: &str) -> Self {
+        Self {
+            service_name: LEGACY_SERVICE_NAME.to_string(),
+            local_service_name: local_service_name(application_identifier, cfg!(debug_assertions)),
+        }
+    }
+
+    /**
+     * 返回本机登录副本的独立存储，不读取或迁移旧的共享钥匙串条目
+     */
+    pub(crate) fn for_local_login(&self) -> Self {
+        Self {
+            service_name: self.local_service_name.clone(),
+            ..self.clone()
+        }
     }
 
     pub fn credential_ref(provider_id: &str, account_key: &str, secret_kind: &str) -> String {
@@ -92,6 +103,14 @@ impl CredentialStore {
             delete_os_secret(&self.service_name, credential_ref)
         })
     }
+}
+
+/**
+ * 生成本机凭据服务名；即使 tauri dev 没有加载 dev 配置，也不与正式版共用
+ */
+fn local_service_name(application_identifier: &str, development: bool) -> String {
+    let mode = if development { "dev" } else { "release" };
+    format!("{application_identifier}.account-usage.{mode}")
 }
 
 /**
@@ -201,14 +220,38 @@ fn credential_unavailable() -> AccountUsageError {
     )
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    /**
+     * 正式版、开发版及不同应用标识的本机副本相互隔离，旧手填凭据不自动迁移
+     */
+    #[test]
+    fn local_login_namespaces_are_isolated() {
+        let release = local_service_name("com.tokenburger.desktop", false);
+        let dev = local_service_name("com.tokenburger.desktop", true);
+        let configured_dev = local_service_name("com.tokenburger.desktop.dev", true);
+        assert_eq!(release, "com.tokenburger.desktop.account-usage.release");
+        assert_ne!(release, dev);
+        assert_ne!(release, configured_dev);
+        assert_ne!(dev, configured_dev);
+        let store = CredentialStore::new("com.tokenburger.desktop");
+        let local = store.for_local_login();
+        assert_ne!(local.service_name, LEGACY_SERVICE_NAME);
+        assert_eq!(
+            local.service_name,
+            local_service_name("com.tokenburger.desktop", cfg!(debug_assertions))
+        );
+        assert_eq!(local.for_local_login().service_name, local.service_name);
+        assert_eq!(store.service_name, LEGACY_SERVICE_NAME);
+    }
 
     /**
      * 静默操作持锁期间阻止可交互操作进入，不读取任何真实凭据或请求系统弹窗
      */
     #[test]
+    #[cfg(target_os = "macos")]
     fn silent_keychain_access_serializes_interactive_operations() {
         use security_framework::os::macos::keychain::SecKeychain;
         use std::sync::mpsc;

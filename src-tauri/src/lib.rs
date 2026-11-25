@@ -218,8 +218,10 @@ pub fn run() {
             // 初始化数据库
             let db_path = db::get_db_path(app.handle());
             db::init_db(&db_path).expect("数据库初始化失败");
-            let account_usage_manager =
-                account_usage::manager::AccountUsageManager::new(db_path.clone());
+            let account_usage_manager = account_usage::manager::AccountUsageManager::new(
+                db_path.clone(),
+                &app.config().identifier,
+            );
             account_usage_manager
                 .initialize_provider_states()
                 .expect("账号用量 Provider 状态初始化失败");

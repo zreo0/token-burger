@@ -32,7 +32,10 @@ enum ProviderRefreshResult<'a> {
 }
 
 impl AccountUsageManager {
-    pub fn new(db_path: PathBuf) -> Self {
+    /**
+     * 根据数据库路径及实际应用标识创建管理器，凭据与应用环境保持对应
+     */
+    pub fn new(db_path: PathBuf, application_identifier: &str) -> Self {
         let providers = providers::all_providers()
             .into_iter()
             .map(Arc::from)
@@ -42,7 +45,7 @@ impl AccountUsageManager {
             providers,
             refresh_locks: Mutex::new(HashSet::new()),
             refresh_idle: Condvar::new(),
-            credentials: CredentialStore::new(),
+            credentials: CredentialStore::new(application_identifier),
             refresh_timeout: Duration::from_secs(DEFAULT_REFRESH_TIMEOUT_SECS),
         }
     }
@@ -297,7 +300,16 @@ impl AccountUsageManager {
             provider.default_refresh_interval_secs(),
         )?;
         if let Some(credential_ref) = &state.credential_ref {
-            self.credentials
+            let credentials = if provider
+                .info(&state)
+                .capabilities
+                .contains(&crate::account_usage::AccountUsageCapability::LocalCredentialImport)
+            {
+                self.credentials.for_local_login()
+            } else {
+                self.credentials.clone()
+            };
+            credentials
                 .delete_secret(credential_ref)
                 .map_err(|error| error.message)?;
         }
@@ -606,7 +618,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("account_usage.sqlite");
         crate::db::init_db(&db_path).unwrap();
-        let manager = AccountUsageManager::new(db_path);
+        let manager = AccountUsageManager::new(db_path, "com.tokenburger.test");
         manager.initialize_provider_states().unwrap();
         (temp, manager)
     }

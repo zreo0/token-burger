@@ -109,21 +109,61 @@ pub(super) fn save(
 ) -> Result<CredentialMetadata, AccountUsageError> {
     let secret =
         serde_json::to_string(credential).map_err(|_| auth_error("无法保存 Cursor 授权"))?;
-    store.save_secret_with_interaction(
-        "cursor",
-        "default",
-        "local",
-        &secret,
-        credential.email.clone(),
-        allow_interaction,
-    )
+    let store = store.for_local_login();
+    let metadata = store
+        .save_secret_with_interaction(
+            "cursor",
+            "default",
+            "local",
+            &secret,
+            credential.email.clone(),
+            allow_interaction,
+        )
+        .map_err(|_| {
+            AccountUsageError::new(
+                AccountUsageStatus::CredentialUnavailable,
+                "已读取 Cursor 登录，但无法保存到当前 TokenBurger 的钥匙串条目，请重新授权",
+            )
+        })?;
+    if allow_interaction {
+        // 单次允许读取源凭据不代表保存的副本可供后台使用，确认回读后才报告授权完成
+        verify_saved_copy(credential, store.load_secret_silently(CREDENTIAL_REF))?;
+    }
+    Ok(metadata)
+}
+
+/**
+ * 验证授权副本可被静默读取且与刚导入的账号一致，失败时明确指出保存后的访问阶段
+ */
+fn verify_saved_copy(
+    credential: &CursorCredential,
+    saved: Result<String, AccountUsageError>,
+) -> Result<(), AccountUsageError> {
+    let matches = saved
+        .ok()
+        .and_then(|secret| serde_json::from_str::<CursorCredential>(&secret).ok())
+        .is_some_and(|saved| &saved == credential);
+    if matches {
+        Ok(())
+    } else {
+        Err(AccountUsageError::new(AccountUsageStatus::CredentialUnavailable,
+            "Cursor 登录已保存，但无法无交互读取 TokenBurger 的凭据副本；请解锁钥匙串并重新授权，需要持续访问时选择“始终允许”"))
+    }
 }
 
 /**
  * 从 Token Burger 的加密存储无交互加载凭据，拒绝把旧 Cookie 当成本机授权
  */
 pub(super) fn load(store: &CredentialStore) -> Result<CursorCredential, AccountUsageError> {
-    let secret = store.load_secret_silently(CREDENTIAL_REF)?;
+    let secret = store
+        .for_local_login()
+        .load_secret_silently(CREDENTIAL_REF)
+        .map_err(|error| {
+            AccountUsageError::new(
+                error.code,
+                "当前 TokenBurger 的 Cursor 凭据尚未授权或无法静默读取，请点击重新授权",
+            )
+        })?;
     serde_json::from_str::<CursorCredential>(&secret)
         .ok()
         .filter(|value| !value.access_token.is_empty() && !value.user_id.is_empty())
@@ -256,6 +296,38 @@ fn auth_error(message: &str) -> AccountUsageError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /**
+     * 保存后必须能静默读回同一份凭据，否则保持授权失败且错误中不包含密钥
+     */
+    #[test]
+    fn saved_copy_must_be_silently_readable() {
+        let credential = CursorCredential {
+            access_token: "test-secret".into(),
+            user_id: "user-test".into(),
+            email: None,
+        };
+        assert!(
+            verify_saved_copy(&credential, Ok(serde_json::to_string(&credential).unwrap())).is_ok()
+        );
+        let other = CursorCredential {
+            user_id: "another-user".into(),
+            ..credential.clone()
+        };
+        for result in [
+            Err(AccountUsageError::new(
+                AccountUsageStatus::CredentialUnavailable,
+                "拒绝静默访问",
+            )),
+            Ok(serde_json::to_string(&other).unwrap()),
+            Ok("invalid".to_string()),
+        ] {
+            let error = verify_saved_copy(&credential, result).unwrap_err();
+            assert_eq!(error.code, AccountUsageStatus::CredentialUnavailable);
+            assert!(error.message.contains("已保存"));
+            assert!(!error.message.contains(&credential.access_token));
+        }
+    }
 
     /**
      * 验证只读导入兼容 BLOB 和 JSON 字符串，且不改变源数据库
