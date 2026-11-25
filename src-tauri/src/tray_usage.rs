@@ -119,6 +119,9 @@ pub(crate) fn set_main_tray_usage_title(
 }
 
 #[cfg(target_os = "macos")]
+/**
+ * 根据提供商和标题颜色生成菜单栏图标附件，图标不可用时返回 None
+ */
 fn provider_attachment_attributed_string(
     provider_id: &str,
     color: &objc2_app_kit::NSColor,
@@ -129,13 +132,20 @@ fn provider_attachment_attributed_string(
 
     let data = NSData::with_bytes(provider_icon_bytes(provider_id)?);
     let image = NSImage::initWithData(NSImage::alloc(), &data)?;
-    let image = tinted_provider_icon(&image, color);
+    // Cursor 的实心图形需要更小的尺寸来平衡视觉重量，缩小后保持原有中心位置
+    let icon_size = if provider_id == "cursor" {
+        13.0
+    } else {
+        PROVIDER_ATTACHMENT_SIZE
+    };
+    let y_offset = PROVIDER_ATTACHMENT_Y_OFFSET + (PROVIDER_ATTACHMENT_SIZE - icon_size) / 2.0;
+    let image = tinted_provider_icon(&image, color, icon_size);
 
     let attachment = NSTextAttachment::new();
     attachment.setImage(Some(&image));
     attachment.setBounds(NSRect::new(
-        NSPoint::new(0.0, PROVIDER_ATTACHMENT_Y_OFFSET),
-        NSSize::new(PROVIDER_ATTACHMENT_SIZE, PROVIDER_ATTACHMENT_SIZE),
+        NSPoint::new(0.0, y_offset),
+        NSSize::new(icon_size, icon_size),
     ));
 
     Some(NSAttributedString::attributedStringWithAttachment(
@@ -160,15 +170,19 @@ fn attributed_title_color(
 }
 
 #[cfg(target_os = "macos")]
+/**
+ * 将源图标按指定颜色和边长绘制，返回用于菜单栏的图像
+ */
 fn tinted_provider_icon(
     source: &objc2_app_kit::NSImage,
     color: &objc2_app_kit::NSColor,
+    icon_size: f64,
 ) -> objc2::rc::Retained<objc2_app_kit::NSImage> {
     use objc2::AnyThread;
     use objc2_app_kit::{NSCompositingOperation, NSImage, NSRectFillUsingOperation};
     use objc2_foundation::{NSPoint, NSRect, NSSize};
 
-    let size = NSSize::new(PROVIDER_ATTACHMENT_SIZE, PROVIDER_ATTACHMENT_SIZE);
+    let size = NSSize::new(icon_size, icon_size);
     let rect = NSRect::new(NSPoint::ZERO, size);
     let image = NSImage::initWithSize(NSImage::alloc(), size);
 
